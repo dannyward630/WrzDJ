@@ -5494,13 +5494,15 @@ export interface components {
              * Target
              * @enum {string}
              */
-            target: "tidal" | "spotify" | "rekordbox" | "m3u" | "txt" | "enginedj" | "lexicon";
+            target: "tidal" | "spotify" | "apple_music" | "rekordbox" | "m3u" | "txt" | "enginedj" | "lexicon";
         };
         /**
          * ExportPreflightOut
          * @description Resolution summary the DJ confirms before exporting.
          */
         ExportPreflightOut: {
+            /** Apple Music Connected */
+            apple_music_connected: boolean | null;
             /** Resolved Count */
             resolved_count: number;
             /**
@@ -5514,7 +5516,7 @@ export interface components {
              * Target
              * @enum {string}
              */
-            target: "tidal" | "spotify" | "rekordbox" | "m3u" | "txt" | "enginedj" | "lexicon";
+            target: "tidal" | "spotify" | "apple_music" | "rekordbox" | "m3u" | "txt" | "enginedj" | "lexicon";
             /** Tidal Connected */
             tidal_connected: boolean | null;
             /** Total */
@@ -7820,7 +7822,7 @@ export interface components {
              * Reason
              * @enum {string}
              */
-            reason: "no_tidal_match" | "no_spotify_match" | "missing_metadata";
+            reason: "no_tidal_match" | "no_spotify_match" | "no_apple_music_match" | "missing_metadata";
             /** Title */
             title: string;
             /** Track Id */
@@ -13427,6 +13429,20 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+            /** @description Apple Music catalog lookup failed. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Apple Music is not configured. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

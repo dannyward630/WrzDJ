@@ -65,6 +65,7 @@ function makePreflightClean(target: ExportPreflight['target'] = 'rekordbox'): Ex
     unresolved: [],
     tidal_connected: null,
     spotify_connected: null,
+    apple_music_connected: null,
   };
 }
 
@@ -101,6 +102,7 @@ function makePreflightWithUnresolved(
     ],
     tidal_connected: null,
     spotify_connected: null,
+    apple_music_connected: null,
   };
 }
 
