@@ -20,7 +20,11 @@ const pagePolicy = policyFromTemplate(template, false);
 const overlayPolicy = policyFromTemplate(template, true);
 assert.match(pagePolicy, /script-src[^;]*https:\/\/js-cdn\.music\.apple\.com/);
 assert.match(pagePolicy, /connect-src[^;]*https:\/\/api\.music\.apple\.com/);
-assert.doesNotMatch(overlayPolicy, /https:\/\/(?:js-cdn\.music|api\.music)\.apple\.com/);
+assert.equal(
+  overlayPolicy.includes('https://js-cdn.music.apple.com') ||
+    overlayPolicy.includes('https://api.music.apple.com'),
+  false,
+);
 
 const html = (policy) => `<!doctype html><meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="${policy.replace(/;\s*frame-ancestors[^;]*/, '')}">
