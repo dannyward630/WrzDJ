@@ -34,8 +34,9 @@ await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const address = server.address();
 assert.ok(address && typeof address === 'object');
 
-const browser = await chromium.launch({ headless: true });
+let browser;
 try {
+  browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   const blocked = [];
   page.on('console', (message) => {
@@ -62,9 +63,14 @@ try {
   assert.deepEqual(blocked, [], 'normal-page CSP should not block MusicKit bootstrap');
 
   const overlay = await browser.newPage();
-  const overlayBlocked = new Promise((resolve) => {
+  const overlayBlocked = new Promise((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error('timed out waiting for the overlay CSP to block MusicKit')),
+      10000,
+    );
     overlay.on('console', (message) => {
       if (message.type() === 'error' && message.text().includes('Content Security Policy')) {
+        clearTimeout(timeout);
         resolve(message.text());
       }
     });
@@ -86,6 +92,6 @@ try {
   await writeFile('.ak/evidence/apple-music-csp-browser.json', `${JSON.stringify(evidence, null, 2)}\n`);
   console.log('Apple Music CSP browser check passed: real MusicKit loaded on normal pages; overlay blocked it.');
 } finally {
-  await browser.close();
+  await browser?.close();
   await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
 }
