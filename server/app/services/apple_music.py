@@ -166,6 +166,18 @@ def link_account(db: Session, user: User, music_user_token: str) -> UserProvider
     return connection
 
 
+def linked_account_status(connection: UserProviderConnection) -> dict[str, object]:
+    """Build the response from the storefront validated during account linking."""
+    metadata = json.loads(connection.metadata_json or "{}")
+    return {
+        "configured": True,
+        "linked": connection.connection_state == "connected"
+        and bool(connection.credential_payload),
+        "requires_reauthorization": connection.connection_state == "reauthorize",
+        "storefront": metadata.get("storefront"),
+    }
+
+
 def disconnect_account(db: Session, user: User) -> None:
     """Clear user credentials while keeping a tombstone for safe future backfills."""
     _lock_user(db, user)

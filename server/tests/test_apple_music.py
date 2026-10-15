@@ -401,18 +401,21 @@ def test_api_link_validates_token_before_service_call(client, auth_headers, monk
 
 
 def test_api_link_returns_storefront_without_echoing_user_token(client, auth_headers, monkeypatch):
+    connection = UserProviderConnection(
+        user_id=1,
+        provider_id="apple_music",
+        connection_state="connected",
+        credential_type="music_user_token",
+        credential_payload="encrypted-token",
+        metadata_json='{"storefront":"us"}',
+    )
     monkeypatch.setattr(
         "app.api.apple_music.apple_music.link_account",
-        lambda *_args: None,
+        lambda *_args: connection,
     )
     monkeypatch.setattr(
         "app.api.apple_music.apple_music.account_status",
-        lambda *_args: {
-            "configured": True,
-            "linked": True,
-            "requires_reauthorization": False,
-            "storefront": "us",
-        },
+        lambda *_args: pytest.fail("link response must use the storefront already validated"),
     )
     user_token = "music-user-token-1234567890"
 

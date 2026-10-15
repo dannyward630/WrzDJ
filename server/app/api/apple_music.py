@@ -85,7 +85,7 @@ def link_account(
     db: Session = Depends(get_db),
 ) -> AppleMusicStatusOut:
     try:
-        apple_music.link_account(db, current_user, payload.music_user_token)
+        connection = apple_music.link_account(db, current_user, payload.music_user_token)
     except apple_music.AppleMusicNotConfigured as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -101,7 +101,7 @@ def link_account(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Could not verify Apple Music authorization",
         ) from exc
-    return AppleMusicStatusOut(**apple_music.account_status(db, current_user))
+    return AppleMusicStatusOut(**apple_music.linked_account_status(connection))
 
 
 @router.post("/disconnect", response_model=dict[str, str])

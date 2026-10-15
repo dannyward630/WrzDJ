@@ -33,11 +33,23 @@ function loadMusicKit(): Promise<MusicKitGlobal> {
     const script = document.createElement('script');
     script.src = MUSIC_KIT_SCRIPT;
     script.async = true;
-    script.onload = () => {
-      if (window.MusicKit) resolve(window.MusicKit);
-      else reject(new Error('Apple Music authorization is unavailable.'));
+    const cleanup = () => {
+      document.removeEventListener('musickitloaded', onMusicKitLoaded);
     };
-    script.onerror = () => reject(new Error('Could not load Apple Music authorization.'));
+    const onMusicKitLoaded = () => {
+      if (window.MusicKit) {
+        cleanup();
+        resolve(window.MusicKit);
+      }
+    };
+    script.onload = () => {
+      onMusicKitLoaded();
+    };
+    script.onerror = () => {
+      cleanup();
+      reject(new Error('Could not load Apple Music authorization.'));
+    };
+    document.addEventListener('musickitloaded', onMusicKitLoaded);
     document.head.appendChild(script);
   });
   const failed = pending.catch(error => {
