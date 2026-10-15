@@ -895,6 +895,56 @@
         "title": "AppleMusicDeveloperTokenOut",
         "type": "object"
       },
+      "AppleMusicLinkIn": {
+        "properties": {
+          "music_user_token": {
+            "maxLength": 8192,
+            "minLength": 20,
+            "title": "Music User Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "music_user_token"
+        ],
+        "title": "AppleMusicLinkIn",
+        "type": "object"
+      },
+      "AppleMusicStatusOut": {
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "linked": {
+            "title": "Linked",
+            "type": "boolean"
+          },
+          "requires_reauthorization": {
+            "title": "Requires Reauthorization",
+            "type": "boolean"
+          },
+          "storefront": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Storefront"
+          }
+        },
+        "required": [
+          "configured",
+          "linked",
+          "requires_reauthorization",
+          "storefront"
+        ],
+        "title": "AppleMusicStatusOut",
+        "type": "object"
+      },
       "AppliedToolCallOut": {
         "description": "One agent tool call, including rationale for mutating tools.",
         "properties": {
@@ -13123,6 +13173,108 @@
           }
         ],
         "summary": "Developer Token",
+        "tags": [
+          "apple-music"
+        ]
+      }
+    },
+    "/api/apple-music/disconnect": {
+      "post": {
+        "operationId": "disconnect_account_api_apple_music_disconnect_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Disconnect Account Api Apple Music Disconnect Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Disconnect Account",
+        "tags": [
+          "apple-music"
+        ]
+      }
+    },
+    "/api/apple-music/link": {
+      "post": {
+        "operationId": "link_account_api_apple_music_link_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppleMusicLinkIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppleMusicStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Link Account",
+        "tags": [
+          "apple-music"
+        ]
+      }
+    },
+    "/api/apple-music/status": {
+      "get": {
+        "operationId": "status_for_user_api_apple_music_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppleMusicStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Status For User",
         "tags": [
           "apple-music"
         ]
