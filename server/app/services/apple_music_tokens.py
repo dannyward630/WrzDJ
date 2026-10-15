@@ -41,6 +41,45 @@ class AppleMusicLinkSuperseded(AppleMusicError):
     """A newer connect or disconnect operation invalidated this link attempt."""
 
 
+class AppleMusicRequestUncertain(AppleMusicError):
+    """A write request may have reached Apple but returned no reliable outcome."""
+
+
+def apple_post(
+    path: str,
+    developer_token: str,
+    *,
+    music_user_token: str,
+    json_body: dict[str, object],
+) -> dict[str, object]:
+    """Create an Apple resource once, preserving ambiguity after transport/server errors."""
+    headers = {
+        "Authorization": f"Bearer {developer_token}",
+        "Music-User-Token": music_user_token,
+    }
+    try:
+        with httpx.Client(timeout=HTTP_TIMEOUT_SECONDS) as client:
+            response = client.post(f"{APPLE_MUSIC_API_BASE}{path}", headers=headers, json=json_body)
+    except httpx.HTTPError as exc:
+        raise AppleMusicRequestUncertain from exc
+    if response.status_code == 401:
+        raise AppleMusicNotConfigured
+    if response.status_code == 403:
+        raise AppleMusicUserAuthorizationError
+    if response.status_code >= 500:
+        raise AppleMusicRequestUncertain
+    try:
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        if response.is_success:
+            raise AppleMusicRequestUncertain from exc
+        raise AppleMusicError("Apple Music rejected the playlist request") from exc
+    if not isinstance(payload, dict):
+        raise AppleMusicRequestUncertain
+    return payload
+
+
 def apple_get(
     path: str,
     developer_token: str,
