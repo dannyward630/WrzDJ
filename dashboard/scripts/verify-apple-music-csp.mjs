@@ -4,7 +4,9 @@ import { createServer } from 'node:http';
 import { chromium } from 'playwright';
 
 const appleScript = 'https://js-cdn.music.apple.com/musickit/v3/musickit.js';
+const appleScriptOrigin = 'https://js-cdn.music.apple.com';
 const appleApi = 'https://api.music.apple.com/v1/__wrzdj_csp_probe__';
+const appleApiOrigin = 'https://api.music.apple.com';
 
 function policyFromTemplate(template, overlay) {
   const policies = [...template.matchAll(/add_header Content-Security-Policy "([^"]+)"/g)];
@@ -15,16 +17,21 @@ function policyFromTemplate(template, overlay) {
   return policy.replaceAll('${API_DOMAIN}', 'api.example.test');
 }
 
+function sourceList(policy, directive) {
+  const sources = policy
+    .split(';')
+    .map((item) => item.trim().split(/\s+/))
+    .find(([name]) => name === directive);
+  return new Set(sources?.slice(1) ?? []);
+}
+
 const template = await readFile('../deploy/nginx/app.conf.template', 'utf8');
 const pagePolicy = policyFromTemplate(template, false);
 const overlayPolicy = policyFromTemplate(template, true);
-assert.match(pagePolicy, /script-src[^;]*https:\/\/js-cdn\.music\.apple\.com/);
-assert.match(pagePolicy, /connect-src[^;]*https:\/\/api\.music\.apple\.com/);
-assert.equal(
-  overlayPolicy.includes('https://js-cdn.music.apple.com') ||
-    overlayPolicy.includes('https://api.music.apple.com'),
-  false,
-);
+assert.equal(sourceList(pagePolicy, 'script-src').has(appleScriptOrigin), true);
+assert.equal(sourceList(pagePolicy, 'connect-src').has(appleApiOrigin), true);
+assert.equal(sourceList(overlayPolicy, 'script-src').has(appleScriptOrigin), false);
+assert.equal(sourceList(overlayPolicy, 'connect-src').has(appleApiOrigin), false);
 
 const html = (policy) => `<!doctype html><meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="${policy.replace(/;\s*frame-ancestors[^;]*/, '')}">
