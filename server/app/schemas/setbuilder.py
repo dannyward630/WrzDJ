@@ -1039,6 +1039,23 @@ class ExportSpotifyOut(BaseModel):
     status: Literal["draft", "locked", "exported"]
 
 
+class ExportAppleMusicIn(BaseModel):
+    """Apple Music export requires an explicit choice before skipping unresolved tracks."""
+
+    skip_unresolved: bool = False
+
+
+class ExportAppleMusicOut(BaseModel):
+    """A playlist confirmed by read-back from the Apple Music library."""
+
+    playlist_id: str
+    playlist_url: str | None
+    added: int
+    skipped: int
+    exported_at: datetime
+    status: Literal["draft", "locked", "exported"]
+
+
 class ExportFileIn(BaseModel):
     """Body for the file (Rekordbox XML / M3U / txt) export."""
 
