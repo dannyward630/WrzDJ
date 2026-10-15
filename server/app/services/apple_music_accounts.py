@@ -7,11 +7,9 @@ from sqlalchemy.orm import Session
 
 from app.models.provider_connection import UserProviderConnection
 from app.models.user import User
-from app.services import apple_music_tokens
+from app.services import apple_music_storage, apple_music_tokens
 
 _STOREFRONT_RE = re.compile(r"^[a-z]{2}$")
-_USER_TOKEN_MIN_LENGTH = 20
-_USER_TOKEN_MAX_LENGTH = 8192
 
 
 def _connection(db: Session, user: User) -> UserProviderConnection | None:
@@ -65,38 +63,6 @@ def _complete_link_attempt(
     return connection
 
 
-def _valid_user_token(token: object) -> bool:
-    return (
-        isinstance(token, str)
-        and _USER_TOKEN_MIN_LENGTH <= len(token) <= _USER_TOKEN_MAX_LENGTH
-        and not any(ord(char) < 32 or ord(char) == 127 for char in token)
-    )
-
-
-def _stored_credentials(connection: UserProviderConnection) -> str | None:
-    try:
-        credentials = json.loads(connection.credential_payload or "")
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(credentials, dict) or type(credentials.get("version")) is not int:
-        return None
-    if credentials["version"] != 1:
-        return None
-    token = credentials.get("music_user_token")
-    return token if _valid_user_token(token) else None
-
-
-def _stored_storefront(connection: UserProviderConnection) -> str | None:
-    try:
-        metadata = json.loads(connection.metadata_json or "{}")
-    except (TypeError, ValueError):
-        return None
-    storefront = metadata.get("storefront") if isinstance(metadata, dict) else None
-    return (
-        storefront if isinstance(storefront, str) and _STOREFRONT_RE.fullmatch(storefront) else None
-    )
-
-
 def _needs_reauthorization(db: Session, connection: UserProviderConnection) -> None:
     if connection.connection_state != "reauthorize":
         connection.connection_state = "reauthorize"
@@ -130,7 +96,7 @@ def linked_account_status(connection: UserProviderConnection) -> dict[str, objec
         "linked": connection.connection_state == "connected"
         and bool(connection.credential_payload),
         "requires_reauthorization": connection.connection_state == "reauthorize",
-        "storefront": _stored_storefront(connection),
+        "storefront": apple_music_storage.stored_storefront(connection),
     }
 
 
@@ -162,9 +128,9 @@ def account_status(db: Session, user: User) -> dict[str, object]:
     token = None
     storefront = None
     if connection and connection.connection_state == "connected":
-        token = _stored_credentials(connection)
-        storefront = _stored_storefront(connection)
-        if token is None or storefront is None:
+        try:
+            token, storefront = apple_music_storage.read_stored_connection(db, user)
+        except apple_music_tokens.AppleMusicNotConnected:
             _needs_reauthorization(db, connection)
     if configured and token and connection and connection.connection_state == "connected":
         try:
@@ -191,12 +157,4 @@ def account_status(db: Session, user: User) -> dict[str, object]:
 
 def stored_connection(db: Session, user: User) -> tuple[str, str]:
     """Return validated stored token and storefront, marking malformed credentials unusable."""
-    connection = _connection(db, user)
-    if not connection or connection.connection_state != "connected":
-        raise apple_music_tokens.AppleMusicNotConnected
-    token = _stored_credentials(connection)
-    storefront = _stored_storefront(connection)
-    if token is None or storefront is None:
-        _needs_reauthorization(db, connection)
-        raise apple_music_tokens.AppleMusicNotConnected
-    return token, storefront
+    return apple_music_storage.read_stored_connection(db, user)

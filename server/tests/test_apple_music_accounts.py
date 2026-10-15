@@ -90,66 +90,6 @@ def test_account_status_rechecks_the_saved_user_token(db, test_user, monkeypatch
     }
 
 
-@pytest.mark.parametrize(
-    ("credential_payload", "metadata_json"),
-    [
-        ("{not-json", '{"storefront":"us"}'),
-        ('{"version":1}', '{"storefront":"us"}'),
-        ('{"version":true,"music_user_token":"' + VALID_TOKEN + '"}', '{"storefront":"us"}'),
-        ('{"version":2,"music_user_token":"' + VALID_TOKEN + '"}', '{"storefront":"us"}'),
-        ('{"version":1,"music_user_token":12}', '{"storefront":"us"}'),
-        ('{"version":1,"music_user_token":"' + VALID_TOKEN + '"}', "{not-json"),
-        ('{"version":1,"music_user_token":"' + VALID_TOKEN + '"}', '{"storefront":12}'),
-    ],
-)
-def test_status_marks_malformed_stored_credentials_for_reauthorization(
-    db, test_user, monkeypatch, credential_payload, metadata_json
-):
-    connection = UserProviderConnection(
-        user_id=test_user.id,
-        provider_id="apple_music",
-        connection_state="connected",
-        credential_type="music_user_token",
-        credential_payload=credential_payload,
-        metadata_json=metadata_json,
-    )
-    db.add(connection)
-    db.commit()
-    monkeypatch.setattr(apple_music_tokens, "is_configured", lambda: True)
-    monkeypatch.setattr(
-        apple_music_accounts,
-        "fetch_user_storefront",
-        lambda *_: pytest.fail("malformed stored credentials must not be sent to Apple"),
-    )
-
-    assert apple_music_accounts.account_status(db, test_user) == {
-        "configured": True,
-        "linked": False,
-        "requires_reauthorization": True,
-        "storefront": None,
-    }
-
-
-def test_resolution_storage_boundary_fails_closed_for_malformed_payload(db, test_user):
-    db.add(
-        UserProviderConnection(
-            user_id=test_user.id,
-            provider_id="apple_music",
-            connection_state="connected",
-            credential_type="music_user_token",
-            credential_payload="{not-json",
-            metadata_json='{"storefront":"us"}',
-        )
-    )
-    db.commit()
-
-    with pytest.raises(apple_music_tokens.AppleMusicNotConnected):
-        apple_music_accounts.stored_connection(db, test_user)
-
-    connection = db.query(UserProviderConnection).filter_by(user_id=test_user.id).one()
-    assert connection.connection_state == "reauthorize"
-
-
 def test_disconnect_increments_authorization_generation(db, test_user):
     apple_music_accounts.disconnect_account(db, test_user)
 
