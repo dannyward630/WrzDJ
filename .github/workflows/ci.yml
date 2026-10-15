@@ -6,7 +6,6 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main, develop]
 
 # Read-only default for every job; jobs that need more declare it themselves.
 permissions:
