@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.encryption import EncryptedText
@@ -23,6 +23,7 @@ class UserProviderConnection(Base):
     scopes: Mapped[str | None] = mapped_column(Text, nullable=True)
     connection_state: Mapped[str] = mapped_column(String(30), nullable=False, default="connected")
     credential_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    authorization_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     credential_payload: Mapped[str | None] = mapped_column(EncryptedText, nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)

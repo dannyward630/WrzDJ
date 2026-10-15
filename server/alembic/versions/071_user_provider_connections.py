@@ -30,6 +30,7 @@ def upgrade() -> None:
         sa.Column("scopes", sa.Text(), nullable=True),
         sa.Column("connection_state", sa.String(length=30), nullable=False),
         sa.Column("credential_type", sa.String(length=50), nullable=False),
+        sa.Column("authorization_generation", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("credential_payload", EncryptedText(), nullable=True),
         sa.Column("expires_at", sa.DateTime(), nullable=True),
         sa.Column("metadata_json", sa.Text(), nullable=True),

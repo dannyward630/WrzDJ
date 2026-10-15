@@ -1,15 +1,15 @@
-"""Apple Music account linking and deployment-token endpoints."""
+"""Apple Music DJ account-link lifecycle endpoints."""
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, StringConstraints, field_validator
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_active_user, get_db
 from app.core.rate_limit import limiter
 from app.models.user import User
-from app.services import apple_music
+from app.services import apple_music_accounts, apple_music_tokens
 
 router = APIRouter()
 
@@ -29,11 +29,6 @@ class AppleMusicLinkIn(BaseModel):
         return value
 
 
-class AppleMusicDeveloperTokenOut(BaseModel):
-    developer_token: str
-    expires_at: int
-
-
 class AppleMusicStatusOut(BaseModel):
     configured: bool
     linked: bool
@@ -49,31 +44,12 @@ def status_for_user(
     db: Session = Depends(get_db),
 ) -> AppleMusicStatusOut:
     try:
-        return AppleMusicStatusOut(**apple_music.account_status(db, current_user))
-    except apple_music.AppleMusicError as exc:
+        return AppleMusicStatusOut(**apple_music_accounts.account_status(db, current_user))
+    except apple_music_tokens.AppleMusicError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Could not check Apple Music account status",
         ) from exc
-
-
-@router.get("/developer-token", response_model=AppleMusicDeveloperTokenOut)
-@limiter.limit("10/minute")
-def developer_token(
-    request: Request,
-    response: Response,
-    current_user: User = Depends(get_current_active_user),
-) -> AppleMusicDeveloperTokenOut:
-    del current_user
-    response.headers["Cache-Control"] = "no-store"
-    try:
-        token, expires_at = apple_music.create_developer_token()
-    except apple_music.AppleMusicNotConfigured as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Apple Music is not configured",
-        ) from exc
-    return AppleMusicDeveloperTokenOut(developer_token=token, expires_at=expires_at)
 
 
 @router.post("/link", response_model=AppleMusicStatusOut)
@@ -85,23 +61,28 @@ def link_account(
     db: Session = Depends(get_db),
 ) -> AppleMusicStatusOut:
     try:
-        connection = apple_music.link_account(db, current_user, payload.music_user_token)
-    except apple_music.AppleMusicNotConfigured as exc:
+        connection = apple_music_accounts.link_account(db, current_user, payload.music_user_token)
+    except apple_music_tokens.AppleMusicNotConfigured as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Apple Music is not configured",
         ) from exc
-    except apple_music.AppleMusicUserAuthorizationError as exc:
+    except apple_music_tokens.AppleMusicUserAuthorizationError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Apple Music authorization failed. Please reconnect your account.",
         ) from exc
-    except apple_music.AppleMusicError as exc:
+    except apple_music_tokens.AppleMusicLinkSuperseded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Apple Music connect was canceled. Try connecting again.",
+        ) from exc
+    except apple_music_tokens.AppleMusicError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Could not verify Apple Music authorization",
         ) from exc
-    return AppleMusicStatusOut(**apple_music.linked_account_status(connection))
+    return AppleMusicStatusOut(**apple_music_accounts.linked_account_status(connection))
 
 
 @router.post("/disconnect", response_model=dict[str, str])
@@ -111,5 +92,5 @@ def disconnect_account(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
-    apple_music.disconnect_account(db, current_user)
+    apple_music_accounts.disconnect_account(db, current_user)
     return {"status": "ok"}
