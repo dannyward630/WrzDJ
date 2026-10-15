@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint app/ lib/",
     "test": "vitest",
+    "test:csp:browser": "node scripts/verify-apple-music-csp.mjs",
     "test:coverage": "vitest run --coverage",
     "screenshots": "playwright test --config playwright.config.ts && bash ../scripts/png-to-webp.sh",
     "e2e": "playwright test --config playwright-e2e.config.ts",
