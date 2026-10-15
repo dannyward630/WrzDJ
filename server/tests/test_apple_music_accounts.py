@@ -3,12 +3,13 @@
 import json
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text, update
 
 from app.models.provider_connection import UserProviderConnection
 from app.services import apple_music_accounts, apple_music_tokens
 
 VALID_TOKEN = "music-user-token-1234567890"
+NEW_TOKEN = "music-user-token-0987654321"
 
 
 def test_link_validates_and_stores_the_encrypted_user_token(db, test_user, monkeypatch):
@@ -90,6 +91,123 @@ def test_account_status_rechecks_the_saved_user_token(db, test_user, monkeypatch
     }
 
 
+def test_stale_apple_403_does_not_revoke_a_newer_reconnection(db, test_user, monkeypatch):
+    connection = UserProviderConnection(
+        user_id=test_user.id,
+        provider_id="apple_music",
+        connection_state="connected",
+        credential_type="music_user_token",
+        credential_payload=json.dumps({"version": 1, "music_user_token": VALID_TOKEN}),
+        metadata_json='{"storefront":"us"}',
+    )
+    db.add(connection)
+    db.commit()
+    initial_generation = connection.authorization_generation
+    connection_id = connection.id
+    monkeypatch.setattr(apple_music_tokens, "is_configured", lambda: True)
+    monkeypatch.setattr(apple_music_tokens, "create_developer_token", lambda: ("dev", 100))
+
+    def reconnect_then_reject(*_args):
+        db.connection().execute(
+            update(UserProviderConnection)
+            .where(UserProviderConnection.id == connection_id)
+            .values(
+                authorization_generation=initial_generation + 1,
+                connection_state="connected",
+                credential_payload=json.dumps({"version": 1, "music_user_token": NEW_TOKEN}),
+                metadata_json='{"storefront":"ca"}',
+            )
+        )
+        db.commit()
+        row = (
+            db.connection()
+            .execute(
+                select(
+                    UserProviderConnection.__table__.c.authorization_generation,
+                    UserProviderConnection.__table__.c.metadata_json,
+                ).where(UserProviderConnection.__table__.c.id == connection_id)
+            )
+            .one()
+        )
+        assert row == (initial_generation + 1, '{"storefront":"ca"}')
+        raise apple_music_tokens.AppleMusicUserAuthorizationError
+
+    monkeypatch.setattr(apple_music_accounts, "fetch_user_storefront", reconnect_then_reject)
+
+    status = apple_music_accounts.account_status(db, test_user)
+
+    assert status == {
+        "configured": True,
+        "linked": True,
+        "requires_reauthorization": False,
+        "storefront": "ca",
+    }
+    db.refresh(connection)
+    assert connection.connection_state == "connected"
+    assert json.loads(connection.credential_payload)["music_user_token"] == NEW_TOKEN
+    assert json.loads(connection.metadata_json) == {"storefront": "ca"}
+
+
+def test_stale_apple_success_does_not_overwrite_a_newer_storefront(db, test_user, monkeypatch):
+    connection = UserProviderConnection(
+        user_id=test_user.id,
+        provider_id="apple_music",
+        connection_state="connected",
+        credential_type="music_user_token",
+        credential_payload=json.dumps({"version": 1, "music_user_token": VALID_TOKEN}),
+        metadata_json='{"storefront":"us"}',
+    )
+    db.add(connection)
+    db.commit()
+    initial_generation = connection.authorization_generation
+    connection_id = connection.id
+    monkeypatch.setattr(apple_music_tokens, "is_configured", lambda: True)
+    monkeypatch.setattr(apple_music_tokens, "create_developer_token", lambda: ("dev", 100))
+
+    def reconnect_then_return_old_storefront(*_args):
+        db.connection().execute(
+            update(UserProviderConnection)
+            .where(UserProviderConnection.id == connection_id)
+            .values(
+                authorization_generation=initial_generation + 1,
+                connection_state="connected",
+                credential_payload=json.dumps({"version": 1, "music_user_token": NEW_TOKEN}),
+                metadata_json='{"storefront":"ca"}',
+            )
+        )
+        db.commit()
+        row = (
+            db.connection()
+            .execute(
+                select(
+                    UserProviderConnection.__table__.c.authorization_generation,
+                    UserProviderConnection.__table__.c.metadata_json,
+                ).where(UserProviderConnection.__table__.c.id == connection_id)
+            )
+            .one()
+        )
+        assert row == (initial_generation + 1, '{"storefront":"ca"}')
+        return "us"
+
+    monkeypatch.setattr(
+        apple_music_accounts,
+        "fetch_user_storefront",
+        reconnect_then_return_old_storefront,
+    )
+
+    status = apple_music_accounts.account_status(db, test_user)
+
+    assert status == {
+        "configured": True,
+        "linked": True,
+        "requires_reauthorization": False,
+        "storefront": "ca",
+    }
+    db.refresh(connection)
+    assert json.loads(connection.credential_payload)["music_user_token"] == NEW_TOKEN
+    assert json.loads(connection.metadata_json) == {"storefront": "ca"}
+
+
 def test_disconnect_increments_authorization_generation(db, test_user):
     apple_music_accounts.disconnect_account(db, test_user)
 
@@ -123,6 +241,65 @@ def test_apple_status_codes_separate_deployment_and_user_authorization(monkeypat
     monkeypatch.setattr(apple_music_tokens.httpx, "Client", lambda **kw: Client(403, **kw))
     with pytest.raises(apple_music_tokens.AppleMusicUserAuthorizationError):
         apple_music_tokens.apple_get("/me/storefront", "dev", music_user_token=VALID_TOKEN)
+
+
+def test_apple_get_rejects_non_object_success_json(monkeypatch):
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return []
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def get(self, *_args, **_kwargs):
+            return Response()
+
+    monkeypatch.setattr(apple_music_tokens.httpx, "Client", Client)
+
+    with pytest.raises(apple_music_tokens.AppleMusicError):
+        apple_music_tokens.apple_get("/me/storefront", "developer-token")
+
+
+def test_malformed_storefront_response_does_not_revoke_the_saved_user_token(
+    db, test_user, monkeypatch
+):
+    connection = UserProviderConnection(
+        user_id=test_user.id,
+        provider_id="apple_music",
+        connection_state="connected",
+        credential_type="music_user_token",
+        credential_payload=json.dumps({"version": 1, "music_user_token": VALID_TOKEN}),
+        metadata_json='{"storefront":"us"}',
+    )
+    db.add(connection)
+    db.commit()
+    monkeypatch.setattr(apple_music_tokens, "is_configured", lambda: True)
+    monkeypatch.setattr(apple_music_tokens, "create_developer_token", lambda: ("dev", 100))
+    monkeypatch.setattr(
+        apple_music_tokens,
+        "apple_get",
+        lambda *_args, **_kwargs: {"data": [None]},
+    )
+
+    with pytest.raises(apple_music_tokens.AppleMusicError):
+        apple_music_accounts.account_status(db, test_user)
+
+    db.refresh(connection)
+    assert connection.connection_state == "connected"
+    assert json.loads(connection.credential_payload)["music_user_token"] == VALID_TOKEN
+    assert json.loads(connection.metadata_json) == {"storefront": "us"}
 
 
 def test_api_status_returns_reconnect_state_for_malformed_stored_data(

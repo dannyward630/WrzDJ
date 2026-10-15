@@ -43,7 +43,7 @@ def apple_get(
     *,
     music_user_token: str | None = None,
     params: dict[str, str] | None = None,
-) -> dict:
+) -> dict[str, object]:
     """Issue an Apple Music API request with deployment and optional user credentials."""
     headers = {"Authorization": f"Bearer {developer_token}"}
     if music_user_token:
@@ -59,9 +59,12 @@ def apple_get(
         raise AppleMusicUserAuthorizationError
     try:
         response.raise_for_status()
-        return response.json()
+        payload = response.json()
     except (httpx.HTTPError, ValueError) as exc:
         raise AppleMusicError("Apple Music request failed") from exc
+    if not isinstance(payload, dict):
+        raise AppleMusicError("Apple Music returned an invalid response")
+    return payload
 
 
 def is_configured(settings: Settings | None = None) -> bool:
