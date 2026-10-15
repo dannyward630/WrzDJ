@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api import (
     admin,
     admin_llm,
+    apple_music,
     auth,
     beatport,
     bridge,
@@ -53,6 +54,7 @@ api_router.include_router(bridge.router, tags=["bridge"])
 api_router.include_router(tidal.router, prefix="/tidal", tags=["tidal"])
 api_router.include_router(beatport.router, prefix="/beatport", tags=["beatport"])
 api_router.include_router(spotify.router, prefix="/spotify", tags=["spotify"])
+api_router.include_router(apple_music.router, prefix="/apple-music", tags=["apple-music"])
 api_router.include_router(kiosk.public_router, prefix="/public/kiosk", tags=["kiosk"])
 api_router.include_router(kiosk.auth_router, prefix="/kiosk", tags=["kiosk"])
 api_router.include_router(admin.router, prefix="/admin", tags=["admin"])

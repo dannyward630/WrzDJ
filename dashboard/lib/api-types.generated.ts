@@ -475,6 +475,74 @@ export interface paths {
         patch: operations["admin_update_user_api_admin_users__user_id__patch"];
         trace?: never;
     };
+    "/api/apple-music/developer-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Developer Token */
+        get: operations["developer_token_api_apple_music_developer_token_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apple-music/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disconnect Account */
+        post: operations["disconnect_account_api_apple_music_disconnect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apple-music/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Link Account */
+        post: operations["link_account_api_apple_music_link_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apple-music/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Status For User */
+        get: operations["status_for_user_api_apple_music_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/email/confirm": {
         parameters: {
             query?: never;
@@ -525,8 +593,11 @@ export interface paths {
          * Login
          * @description Issue the DJ JWT.
          *
-         *     The token is returned in the body for bearer clients (bridge-app) AND set as
-         *     an HttpOnly session cookie for the dashboard (#754), which never stores it.
+         *     The token is returned in the body for bearer clients (bridge-app). For the
+         *     dashboard (#754) it is ALSO set as an HttpOnly session cookie, but only when
+         *     the request carries the CSRF header: a cross-site form POST cannot add that
+         *     header, so it cannot plant a session cookie for an attacker's account in a
+         *     victim's browser (login CSRF).
          */
         post: operations["login_api_auth_login_post"];
         delete?: never;
@@ -4234,6 +4305,29 @@ export interface components {
             slots: components["schemas"]["SlotOut"][];
             /** Tool Calls */
             tool_calls: components["schemas"]["AppliedToolCallOut"][];
+        };
+        /** AppleMusicDeveloperTokenOut */
+        AppleMusicDeveloperTokenOut: {
+            /** Developer Token */
+            developer_token: string;
+            /** Expires At */
+            expires_at: number;
+        };
+        /** AppleMusicLinkIn */
+        AppleMusicLinkIn: {
+            /** Music User Token */
+            music_user_token: string;
+        };
+        /** AppleMusicStatusOut */
+        AppleMusicStatusOut: {
+            /** Configured */
+            configured: boolean;
+            /** Linked */
+            linked: boolean;
+            /** Requires Reauthorization */
+            requires_reauthorization: boolean;
+            /** Storefront */
+            storefront: string | null;
         };
         /**
          * AppliedToolCallOut
@@ -8826,6 +8920,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    developer_token_api_apple_music_developer_token_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppleMusicDeveloperTokenOut"];
+                };
+            };
+        };
+    };
+    disconnect_account_api_apple_music_disconnect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+        };
+    };
+    link_account_api_apple_music_link_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppleMusicLinkIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppleMusicStatusOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    status_for_user_api_apple_music_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppleMusicStatusOut"];
                 };
             };
         };

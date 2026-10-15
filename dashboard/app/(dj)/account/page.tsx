@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { api } from '@/lib/api';
 import AiProvidersSection from '@/components/AiProvidersSection';
+import AppleMusicAccountCard from '@/components/AppleMusicAccountCard';
 import { LOCALES, type Locale } from '@/lib/locales';
 import { useLocale } from '@/lib/locale';
 
@@ -247,6 +248,8 @@ export default function AccountPage() {
       <div style={{ background: 'var(--card)', borderRadius: '0.75rem', padding: '1.5rem', marginTop: '1.5rem' }}>
         <AiProvidersSection />
       </div>
+
+      <AppleMusicAccountCard />
 
       <div style={{ background: 'var(--card)', borderRadius: '0.75rem', padding: '1.5rem', marginTop: '1.5rem' }}>
         <h2 style={{ marginTop: 0, marginBottom: '1.25rem', fontSize: '1.1rem' }}>Guest Experience</h2>

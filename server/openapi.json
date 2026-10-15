@@ -877,6 +877,74 @@
         "title": "AgentChatOut",
         "type": "object"
       },
+      "AppleMusicDeveloperTokenOut": {
+        "properties": {
+          "developer_token": {
+            "title": "Developer Token",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "developer_token",
+          "expires_at"
+        ],
+        "title": "AppleMusicDeveloperTokenOut",
+        "type": "object"
+      },
+      "AppleMusicLinkIn": {
+        "properties": {
+          "music_user_token": {
+            "maxLength": 8192,
+            "minLength": 20,
+            "title": "Music User Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "music_user_token"
+        ],
+        "title": "AppleMusicLinkIn",
+        "type": "object"
+      },
+      "AppleMusicStatusOut": {
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "linked": {
+            "title": "Linked",
+            "type": "boolean"
+          },
+          "requires_reauthorization": {
+            "title": "Requires Reauthorization",
+            "type": "boolean"
+          },
+          "storefront": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Storefront"
+          }
+        },
+        "required": [
+          "configured",
+          "linked",
+          "requires_reauthorization",
+          "storefront"
+        ],
+        "title": "AppleMusicStatusOut",
+        "type": "object"
+      },
       "AppliedToolCallOut": {
         "description": "One agent tool call, including rationale for mutating tools.",
         "properties": {
@@ -13084,6 +13152,134 @@
         ]
       }
     },
+    "/api/apple-music/developer-token": {
+      "get": {
+        "operationId": "developer_token_api_apple_music_developer_token_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppleMusicDeveloperTokenOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Developer Token",
+        "tags": [
+          "apple-music"
+        ]
+      }
+    },
+    "/api/apple-music/disconnect": {
+      "post": {
+        "operationId": "disconnect_account_api_apple_music_disconnect_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Disconnect Account Api Apple Music Disconnect Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Disconnect Account",
+        "tags": [
+          "apple-music"
+        ]
+      }
+    },
+    "/api/apple-music/link": {
+      "post": {
+        "operationId": "link_account_api_apple_music_link_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppleMusicLinkIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppleMusicStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Link Account",
+        "tags": [
+          "apple-music"
+        ]
+      }
+    },
+    "/api/apple-music/status": {
+      "get": {
+        "operationId": "status_for_user_api_apple_music_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppleMusicStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Status For User",
+        "tags": [
+          "apple-music"
+        ]
+      }
+    },
     "/api/auth/email/confirm": {
       "get": {
         "operationId": "confirm_email_change_api_auth_email_confirm_get",
@@ -13175,7 +13371,7 @@
     },
     "/api/auth/login": {
       "post": {
-        "description": "Issue the DJ JWT.\n\nThe token is returned in the body for bearer clients (bridge-app) AND set as\nan HttpOnly session cookie for the dashboard (#754), which never stores it.",
+        "description": "Issue the DJ JWT.\n\nThe token is returned in the body for bearer clients (bridge-app). For the\ndashboard (#754) it is ALSO set as an HttpOnly session cookie, but only when\nthe request carries the CSRF header: a cross-site form POST cannot add that\nheader, so it cannot plant a session cookie for an attacker's account in a\nvictim's browser (login CSRF).",
         "operationId": "login_api_auth_login_post",
         "requestBody": {
           "content": {

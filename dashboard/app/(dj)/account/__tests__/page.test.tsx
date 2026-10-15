@@ -35,6 +35,10 @@ const { mockGetMe, mockChangePassword, mockRequestEmailChange, mockUpdateMyPrefe
         // individual tests still rebinds the same reference the page calls.
         listLlmConnectors: () => Promise.resolve([]),
         getLlmPolicy: () => Promise.reject(new Error('forbidden')),
+        getAppleMusicStatus: vi.fn(),
+        getAppleMusicDeveloperToken: vi.fn(),
+        linkAppleMusicAccount: vi.fn(),
+        disconnectAppleMusicAccount: vi.fn(),
       },
     };
   });
@@ -58,6 +62,12 @@ describe('AccountPage', () => {
       frictionless_join_default: false,
     });
     mockUpdateMyPreferences.mockResolvedValue(undefined);
+    mockApi.getAppleMusicStatus.mockResolvedValue({
+      configured: false,
+      linked: false,
+      requires_reauthorization: false,
+      storefront: null,
+    });
   });
 
   it('renders Change Password and Change Email headings', async () => {
