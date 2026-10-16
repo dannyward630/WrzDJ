@@ -318,7 +318,7 @@ describe('bridge:exportDebugReport IPC boundary', () => {
   });
 
   it('uses the read fallback and awaits the report write', async () => {
-    mocks.readFile.mockRejectedValue(new Error('missing log'));
+    mocks.readFile.mockRejectedValue(new Error('read failure'));
     let resolveWrite!: () => void;
     const writeCompleted = new Promise<void>((resolve) => {
       resolveWrite = resolve;
@@ -341,6 +341,7 @@ describe('bridge:exportDebugReport IPC boundary', () => {
       expect.stringContaining('(no log file found)'),
       'utf-8',
     );
+    expect(mocks.readFile).toHaveBeenCalledWith('/tmp/wrzdj.log', 'utf-8');
 
     resolveWrite();
     await expect(exportResult).resolves.toBe('/tmp/report.txt');
@@ -366,7 +367,7 @@ describe('bridge:exportDebugReport IPC boundary', () => {
   it('reads the rotated log when the current log is absent', async () => {
     mocks.readFile.mockImplementation(async (path: string) => {
       if (path.endsWith('.1')) return 'rotated bridge log';
-      throw new Error('missing current log');
+      throw Object.assign(new Error('missing current log'), { code: 'ENOENT' });
     });
 
     await handler(IPC_CHANNELS.BRIDGE_EXPORT_DEBUG_REPORT)({});
@@ -376,6 +377,20 @@ describe('bridge:exportDebugReport IPC boundary', () => {
       expect.stringContaining('rotated bridge log'),
       'utf-8',
     );
+    expect(mocks.readFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses the no-log fallback when both current and rotated logs are absent', async () => {
+    mocks.readFile.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+
+    await handler(IPC_CHANNELS.BRIDGE_EXPORT_DEBUG_REPORT)({});
+
+    expect(mocks.writeFile).toHaveBeenCalledWith(
+      '/tmp/report.txt',
+      expect.stringContaining('(no log file found)'),
+      'utf-8',
+    );
+    expect(mocks.readFile).toHaveBeenCalledTimes(2);
   });
 });
 

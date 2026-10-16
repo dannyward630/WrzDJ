@@ -231,15 +231,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
     const logContents = await (async () => {
       const paths = [logFileWriter.getLogPath(), `${logFileWriter.getLogPath()}.1`];
-      const contents: string[] = [];
-      for (const path of paths) {
-        try {
-          contents.unshift(await readFile(path, 'utf-8'));
-        } catch {
-          // A rotated or not-yet-created file is optional.
-        }
+      try {
+        return await readFile(paths[0], 'utf-8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return '(no log file found)';
       }
-      return contents.length > 0 ? contents.join('\n') : '(no log file found)';
+      try {
+        return await readFile(paths[1], 'utf-8');
+      } catch {
+        return '(no log file found)';
+      }
     })();
 
     const lines = [
