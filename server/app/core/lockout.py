@@ -45,18 +45,6 @@ class LockoutManager:
         self._lock = Lock()
         self._last_cleanup = time.time()
 
-    def _make_key(self, ip: str | None, username: str | None) -> str:
-        """Create a composite key from IP and username."""
-        # Track by both IP and username to prevent:
-        # - One IP trying many usernames
-        # - One username being tried from many IPs
-        parts = []
-        if ip:
-            parts.append(f"ip:{ip}")
-        if username:
-            parts.append(f"user:{username.lower()}")
-        return "|".join(parts) if parts else "unknown"
-
     def _cleanup_old_entries(self) -> None:
         """Remove expired lockout entries."""
         now = time.time()
@@ -84,7 +72,8 @@ class LockoutManager:
         with self._lock:
             self._cleanup_old_entries()
 
-            # Check both IP-based and username-based lockouts
+            # Keep independent keys: one IP trying many usernames and one username
+            # tried from many IPs must each reach their own lockout threshold.
             keys_to_check = []
             if ip:
                 keys_to_check.append(f"ip:{ip}")
