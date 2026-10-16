@@ -100,6 +100,27 @@ describe('ApiClient', () => {
       expect(mockFetch.mock.calls[0][0]).toContain('/api/setbuilder/sets/42/critique');
     });
 
+    it('records an Apple Music playlist found during export recovery', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ status: 'exported' }),
+      });
+
+      const result = await api.reconcileAppleMusicExport(42, {
+        action: 'playlist_found',
+        playlist_id: 'p.savedPlaylist',
+      });
+
+      expect(result.status).toBe('exported');
+      const [url, options] = mockFetch.mock.calls[0];
+      expect(url).toContain('/api/setbuilder/sets/42/export/apple-music/recovery');
+      expect(options.method).toBe('POST');
+      expect(JSON.parse(options.body)).toEqual({
+        action: 'playlist_found',
+        playlist_id: 'p.savedPlaylist',
+      });
+    });
+
     it('loads agent history and sends chat turns without client history', async () => {
       mockFetch
         .mockResolvedValueOnce({
@@ -3137,6 +3158,50 @@ describe('ApiClient', () => {
 
       await expect(withHumanRetry(doFetch, reverify)).rejects.toThrow('human_verification_failed');
       expect(doFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('preserves a structured provider error code and detail for recovery handling', async () => {
+      const detail = {
+        code: 'apple_music_write_uncertain',
+        message: 'Do not retry; check your library.',
+        playlist_id: 'p.playlist123',
+      };
+      const doFetch = vi.fn(async () => new Response(JSON.stringify({ detail }), { status: 502 }));
+
+      const error = await withHumanRetry(doFetch, vi.fn()).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error).toMatchObject({
+        message: detail.message,
+        code: detail.code,
+        detail,
+      });
+    });
+  });
+
+  describe('Apple Music set export', () => {
+    it('preserves the uncertain write code, message, and known playlist ID from HTTP errors', async () => {
+      api.setToken('test-token');
+      const detail = {
+        code: 'apple_music_write_uncertain',
+        message: 'Do not retry; check your library.',
+        playlist_id: 'p.playlist123',
+      };
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ detail }), { status: 502 }));
+
+      const error = await api.exportSetToAppleMusic(42, false).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error).toMatchObject({
+        status: 502,
+        message: detail.message,
+        code: detail.code,
+        detail,
+      });
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/setbuilder/sets/42/export/apple-music'),
+        expect.objectContaining({ method: 'POST' }),
+      );
     });
   });
 

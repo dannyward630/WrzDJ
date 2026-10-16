@@ -109,6 +109,9 @@ import type {
   ExportPreflight,
   ExportTidalResult,
   ExportSpotifyResult,
+  ExportAppleMusicResult,
+  ExportAppleMusicRecoveryRequest,
+  ExportAppleMusicRecoveryResult,
 } from './api-types';
 
 export type {
@@ -224,6 +227,9 @@ export type {
   ExportPreflight,
   ExportTidalResult,
   ExportSpotifyResult,
+  ExportAppleMusicResult,
+  ExportAppleMusicRecoveryRequest,
+  ExportAppleMusicRecoveryResult,
   UnresolvedTrack,
 } from './api-types';
 
@@ -330,11 +336,32 @@ export interface BulkReviewResponse {
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  code?: string;
+  detail?: unknown;
+  constructor(message: string, status: number, code?: string, detail?: unknown) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.code = code;
+    this.detail = detail;
   }
+}
+
+function apiErrorFromBody(body: unknown, status: number): ApiError {
+  const errorObject = body && typeof body === 'object'
+    ? body as { detail?: unknown }
+    : null;
+  const detail = errorObject?.detail;
+  const detailObject = detail && typeof detail === 'object'
+    ? detail as { code?: unknown; message?: unknown }
+    : null;
+  const message = typeof detail === 'string'
+    ? detail
+    : typeof detailObject?.message === 'string'
+      ? detailObject.message
+      : 'Request failed';
+  const code = typeof detailObject?.code === 'string' ? detailObject.code : undefined;
+  return new ApiError(message, status, code, detail);
 }
 
 export class NicknameConflictError extends Error {
@@ -404,13 +431,13 @@ export async function withHumanRetry<T>(
   }
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: 'Request failed' }));
-    if (error?.detail?.code === 'human_verification_required') {
+    if (apiErrorFromBody(error, res.status).code === 'human_verification_required') {
       // Still unverified after the one retry — surface a typed error so pages
       // can distinguish "bot check pending/failed" from feature-level 403s
       // (e.g. frictionless_disabled). See issue #419.
       throw new HumanVerificationRequiredError();
     }
-    throw new ApiError(error.detail || 'Request failed', res.status);
+    throw apiErrorFromBody(error, res.status);
   }
   return res.json();
 }
@@ -493,7 +520,7 @@ class ApiClient {
         this.onUnauthorized();
       }
       const error = await response.json().catch(() => ({ detail: 'Request failed' }));
-      throw new ApiError(typeof error.detail === 'string' ? error.detail : 'Request failed', response.status);
+      throw apiErrorFromBody(error, response.status);
     }
 
     if (response.status === 204) {
@@ -522,7 +549,7 @@ class ApiClient {
         this.onUnauthorized();
       }
       const error = await response.json().catch(() => ({ detail: 'Request failed' }));
-      throw new ApiError(typeof error.detail === 'string' ? error.detail : 'Request failed', response.status);
+      throw apiErrorFromBody(error, response.status);
     }
 
     return response;
@@ -536,7 +563,7 @@ class ApiClient {
     const response = await fetch(url);
     if (!response.ok) {
       const error = await response.json().catch(() => ({ detail: 'Request failed' }));
-      throw new ApiError(typeof error.detail === 'string' ? error.detail : 'Request failed', response.status);
+      throw apiErrorFromBody(error, response.status);
     }
     return response.json();
   }
@@ -1105,6 +1132,26 @@ class ApiClient {
     return this.fetch(`/api/setbuilder/sets/${setId}/export/spotify`, {
       method: 'POST',
       body: JSON.stringify({ skip_unresolved: skipUnresolved }),
+    });
+  }
+
+  async exportSetToAppleMusic(
+    setId: number,
+    skipUnresolved: boolean
+  ): Promise<ExportAppleMusicResult> {
+    return this.fetch(`/api/setbuilder/sets/${setId}/export/apple-music`, {
+      method: 'POST',
+      body: JSON.stringify({ skip_unresolved: skipUnresolved }),
+    });
+  }
+
+  async reconcileAppleMusicExport(
+    setId: number,
+    request: ExportAppleMusicRecoveryRequest,
+  ): Promise<ExportAppleMusicRecoveryResult> {
+    return this.fetch(`/api/setbuilder/sets/${setId}/export/apple-music/recovery`, {
+      method: 'POST',
+      body: JSON.stringify(request),
     });
   }
 
