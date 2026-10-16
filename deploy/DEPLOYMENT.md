@@ -222,9 +222,14 @@ sudo systemctl start nginx
 **Important:** DNS must be pointing to your server before running certbot.
 
 ```bash
-# Get certificates (uses wrzdj-certbot wrapper for safe execution)
-sudo wrzdj-certbot --nginx -d api.yourdomain.com
-sudo wrzdj-certbot --nginx -d app.yourdomain.com
+# Get the ECDSA certificates (uses the restricted wrapper for safe execution)
+sudo wrzdj-certbot --nginx --cert-name api.yourdomain.com --key-type ecdsa -d api.yourdomain.com
+sudo wrzdj-certbot --nginx --cert-name app.yourdomain.com --key-type ecdsa -d app.yourdomain.com
+
+# Get the RSA certificates required for corporate proxy compatibility.
+# The nginx templates load both lineages for every HTTPS vhost.
+sudo wrzdj-certbot --nginx --cert-name api.yourdomain.com-rsa --key-type rsa -d api.yourdomain.com
+sudo wrzdj-certbot --nginx --cert-name app.yourdomain.com-rsa --key-type rsa -d app.yourdomain.com
 
 # Verify auto-renewal is enabled
 sudo systemctl status certbot.timer

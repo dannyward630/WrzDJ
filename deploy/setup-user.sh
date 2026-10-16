@@ -149,6 +149,7 @@ case "${1:-}" in
   --nginx)
     shift
     domains=()
+    certbot_args=()
     while [ $# -gt 0 ]; do
       if [ "$1" = "-d" ] && [ $# -gt 1 ]; then
         domain="$2"
@@ -157,6 +158,22 @@ case "${1:-}" in
           exit 1
         fi
         domains+=("-d" "$domain")
+        shift 2
+      elif [ "$1" = "--cert-name" ] && [ $# -gt 1 ]; then
+        cert_name="$2"
+        if [[ ! "$cert_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]; then
+          echo "ERROR: Invalid certificate name: $cert_name" >&2
+          exit 1
+        fi
+        certbot_args+=("--cert-name" "$cert_name")
+        shift 2
+      elif [ "$1" = "--key-type" ] && [ $# -gt 1 ]; then
+        key_type="$2"
+        if [ "$key_type" != "ecdsa" ] && [ "$key_type" != "rsa" ]; then
+          echo "ERROR: Invalid key type: $key_type" >&2
+          exit 1
+        fi
+        certbot_args+=("--key-type" "$key_type")
         shift 2
       else
         echo "ERROR: Unexpected argument: $1" >&2
@@ -167,7 +184,7 @@ case "${1:-}" in
       echo "Usage: wrzdj-certbot --nginx -d domain1 [-d domain2 ...]" >&2
       exit 1
     fi
-    exec /usr/bin/certbot --nginx --non-interactive "${domains[@]}"
+    exec /usr/bin/certbot --nginx --non-interactive "${certbot_args[@]}" "${domains[@]}"
     ;;
   renew)
     if [ "${2:-}" = "--dry-run" ]; then

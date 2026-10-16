@@ -14,6 +14,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$SCRIPT_DIR/nginx"
+# Override this path only for isolated validation; production uses /etc/nginx.
+NGINX_ETC_DIR="${NGINX_ETC_DIR:-/etc/nginx}"
+NGINX_SITES_AVAILABLE="$NGINX_ETC_DIR/sites-available"
+NGINX_SITES_ENABLED="$NGINX_ETC_DIR/sites-enabled"
+NGINX_CONF_D="$NGINX_ETC_DIR/conf.d"
 
 # Use sudo only when not running as root
 SUDO=""
@@ -86,7 +91,7 @@ envsubst "$VARS" < "$TEMPLATE_DIR/default.conf.template" \
 echo "    Generated: $TEMPLATE_DIR/default.conf"
 
 # Install to nginx if running as root / with sudo
-if [ -d /etc/nginx/sites-available ]; then
+if [ -d "$NGINX_SITES_AVAILABLE" ]; then
   echo ""
   echo "==> Installing http-level nginx configs to conf.d"
 
@@ -98,9 +103,9 @@ if [ -d /etc/nginx/sites-available ]; then
     if [ -n "$SUDO" ] && [ -x /usr/local/bin/wrzdj-nginx-confd-install ]; then
       $SUDO /usr/local/bin/wrzdj-nginx-confd-install "$src"
     else
-      cp "$src" "/etc/nginx/conf.d/$dest_name"
+      $SUDO cp "$src" "$NGINX_CONF_D/$dest_name"
     fi
-    echo "    Installed: /etc/nginx/conf.d/$dest_name"
+    echo "    Installed: $NGINX_CONF_D/$dest_name"
   }
 
   install_confd_config "$TEMPLATE_DIR/logging.conf" "wrzdj-logging.conf"
@@ -116,17 +121,17 @@ if [ -d /etc/nginx/sites-available ]; then
     $SUDO /usr/local/bin/wrzdj-nginx-install "$TEMPLATE_DIR/default.conf"
   else
     # Running as root — direct cp/ln
-    cp "$TEMPLATE_DIR/$API_DOMAIN.conf" "/etc/nginx/sites-available/$API_DOMAIN"
-    cp "$TEMPLATE_DIR/$APP_DOMAIN.conf" "/etc/nginx/sites-available/$APP_DOMAIN"
-    cp "$TEMPLATE_DIR/default.conf" "/etc/nginx/sites-available/default"
-    ln -sf "/etc/nginx/sites-available/$API_DOMAIN" "/etc/nginx/sites-enabled/$API_DOMAIN"
-    ln -sf "/etc/nginx/sites-available/$APP_DOMAIN" "/etc/nginx/sites-enabled/$APP_DOMAIN"
-    ln -sf "/etc/nginx/sites-available/default" "/etc/nginx/sites-enabled/default"
+    $SUDO cp "$TEMPLATE_DIR/$API_DOMAIN.conf" "$NGINX_SITES_AVAILABLE/$API_DOMAIN"
+    $SUDO cp "$TEMPLATE_DIR/$APP_DOMAIN.conf" "$NGINX_SITES_AVAILABLE/$APP_DOMAIN"
+    $SUDO cp "$TEMPLATE_DIR/default.conf" "$NGINX_SITES_AVAILABLE/default"
+    $SUDO ln -sf "$NGINX_SITES_AVAILABLE/$API_DOMAIN" "$NGINX_SITES_ENABLED/$API_DOMAIN"
+    $SUDO ln -sf "$NGINX_SITES_AVAILABLE/$APP_DOMAIN" "$NGINX_SITES_ENABLED/$APP_DOMAIN"
+    $SUDO ln -sf "$NGINX_SITES_AVAILABLE/default" "$NGINX_SITES_ENABLED/default"
   fi
 
-  echo "    Installed: /etc/nginx/sites-available/$API_DOMAIN"
-  echo "    Installed: /etc/nginx/sites-available/$APP_DOMAIN"
-  echo "    Installed: /etc/nginx/sites-available/default (catch-all)"
+  echo "    Installed: $NGINX_SITES_AVAILABLE/$API_DOMAIN"
+  echo "    Installed: $NGINX_SITES_AVAILABLE/$APP_DOMAIN"
+  echo "    Installed: $NGINX_SITES_AVAILABLE/default (catch-all)"
 
   echo ""
   echo "==> Testing nginx config"
@@ -156,8 +161,8 @@ fi
 # /e/*/overlay that sets CSP frame-ancestors * (allows OBS/streaming embeds).
 # Existing deployments that re-run setup-nginx.sh get this automatically via
 # the template re-generation above. This section just confirms it.
-if [ -d /etc/nginx/sites-available ]; then
-  INSTALLED_APP="/etc/nginx/sites-available/$APP_DOMAIN"
+if [ -d "$NGINX_SITES_AVAILABLE" ]; then
+  INSTALLED_APP="$NGINX_SITES_AVAILABLE/$APP_DOMAIN"
   if [ -f "$INSTALLED_APP" ] && ! grep -q "frame-ancestors" "$INSTALLED_APP"; then
     echo ""
     echo "==> Migration note:"
@@ -169,7 +174,10 @@ fi
 
 echo ""
 echo "==> Next steps:"
-echo "    1. Set up SSL: sudo wrzdj-certbot --nginx -d $API_DOMAIN -d $APP_DOMAIN"
-echo "    2. Verify: curl -I https://$API_DOMAIN/health"
-echo "    3. Verify JSON logs: tail -1 /var/log/nginx/$API_DOMAIN.access.log | python3 -m json.tool"
-echo "    4. Analytics: ./deploy/scripts/analytics.sh --api"
+echo "    1. Set up ECDSA SSL: sudo wrzdj-certbot --nginx --cert-name $API_DOMAIN --key-type ecdsa -d $API_DOMAIN"
+echo "       sudo wrzdj-certbot --nginx --cert-name $APP_DOMAIN --key-type ecdsa -d $APP_DOMAIN"
+echo "    2. Set up RSA compatibility SSL: sudo wrzdj-certbot --nginx --cert-name $API_DOMAIN-rsa --key-type rsa -d $API_DOMAIN"
+echo "       sudo wrzdj-certbot --nginx --cert-name $APP_DOMAIN-rsa --key-type rsa -d $APP_DOMAIN"
+echo "    3. Verify: curl -I https://$API_DOMAIN/health"
+echo "    4. Verify JSON logs: tail -1 /var/log/nginx/$API_DOMAIN.access.log | python3 -m json.tool"
+echo "    5. Analytics: ./deploy/scripts/analytics.sh --api"

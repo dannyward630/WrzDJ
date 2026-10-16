@@ -352,7 +352,11 @@ docker compose -f deploy/docker-compose.yml up -d --build
 Set up nginx:
 ```bash
 APP_DOMAIN=app.yourdomain.com API_DOMAIN=api.yourdomain.com ./deploy/setup-nginx.sh
-sudo certbot --nginx -d app.yourdomain.com -d api.yourdomain.com
+# setup-nginx.sh loads both ECDSA and RSA certificates for each vhost.
+sudo certbot --nginx --cert-name app.yourdomain.com --key-type ecdsa -d app.yourdomain.com
+sudo certbot --nginx --cert-name api.yourdomain.com --key-type ecdsa -d api.yourdomain.com
+sudo certbot --nginx --cert-name app.yourdomain.com-rsa --key-type rsa -d app.yourdomain.com
+sudo certbot --nginx --cert-name api.yourdomain.com-rsa --key-type rsa -d api.yourdomain.com
 ```
 
 GoAccess analytics are available for production traffic — see `deploy/scripts/analytics.sh`.
