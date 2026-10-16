@@ -221,7 +221,7 @@ jobs:
         run: npm run lint
 
       - name: Type check
-        run: npx tsc --noEmit
+        run: npm run typecheck
 
       - name: Run tests with coverage
         run: npm test -- --run --coverage
