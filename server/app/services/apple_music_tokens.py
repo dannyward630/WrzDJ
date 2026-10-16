@@ -89,11 +89,10 @@ def _configured_origins(settings: Settings) -> list[str]:
             parsed = urlsplit(origin)
             port = parsed.port
         except ValueError:
-            port = None
-            parsed = None
+            logger.warning("Apple Music developer token origin configuration is invalid")
+            raise AppleMusicNotConfigured from None
         if (
-            parsed is None
-            or parsed.scheme not in {"http", "https"}
+            parsed.scheme not in {"http", "https"}
             or not parsed.hostname
             or parsed.username is not None
             or parsed.password is not None
