@@ -212,12 +212,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     const status = bridgeRunner.getStatus();
     const settings = store.getSettings();
 
-    let logContents = '';
-    try {
-      logContents = readFileSync(logFileWriter.getLogPath(), 'utf-8');
-    } catch {
-      logContents = '(no log file found)';
-    }
+    const logContents = (() => {
+      try {
+        return readFileSync(logFileWriter.getLogPath(), 'utf-8');
+      } catch {
+        return '(no log file found)';
+      }
+    })();
 
     const lines = [
       '=== WrzDJ Bridge Debug Report ===',
