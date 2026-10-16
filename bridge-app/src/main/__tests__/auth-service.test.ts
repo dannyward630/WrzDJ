@@ -77,6 +77,16 @@ describe('login', () => {
       .rejects.toThrow('Login response did not include a valid access token');
   });
 
+  it('rejects unparseable success bodies with a stable message', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.reject(new SyntaxError('Unexpected token <')),
+    });
+
+    await expect(login('https://api.wrzdj.com', 'admin', 'pass'))
+      .rejects.toThrow('Login response did not include a valid access token');
+  });
+
   it('preserves a valid access token exactly', async () => {
     mockFetch.mockResolvedValue({
       ok: true,

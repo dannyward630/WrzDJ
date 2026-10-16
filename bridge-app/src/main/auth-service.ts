@@ -32,7 +32,7 @@ export async function login(
     throw new Error(typeof detail === 'string' && detail.trim() ? detail : 'Login failed');
   }
 
-  const data: unknown = await response.json();
+  const data: unknown = await response.json().catch(() => null);
   const accessToken =
     data !== null && typeof data === 'object' && 'access_token' in data
       ? data.access_token
