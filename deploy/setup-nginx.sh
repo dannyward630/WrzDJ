@@ -20,6 +20,7 @@ NGINX_SITES_AVAILABLE="$NGINX_ETC_DIR/sites-available"
 NGINX_SITES_ENABLED="$NGINX_ETC_DIR/sites-enabled"
 NGINX_CONF_D="$NGINX_ETC_DIR/conf.d"
 LETSENCRYPT_DIR="${LETSENCRYPT_DIR:-/etc/letsencrypt}"
+CERTIFICATE_CHECKER="${CERTIFICATE_CHECKER:-/usr/local/bin/wrzdj-certificates-ready}"
 
 # Use sudo only when not running as root
 SUDO=""
@@ -51,9 +52,20 @@ export API_DOMAIN
 
 certificates_ready() {
   local domain="$1"
+  if [ -n "$SUDO" ] && [ -x "$CERTIFICATE_CHECKER" ]; then
+    $SUDO "$CERTIFICATE_CHECKER" "$domain"
+    return
+  fi
   [ -s "$LETSENCRYPT_DIR/live/$domain/fullchain.pem" ] &&
     [ -s "$LETSENCRYPT_DIR/live/$domain/privkey.pem" ]
 }
+
+if [ -n "$SUDO" ] && [ ! -x "$CERTIFICATE_CHECKER" ] &&
+  [ -d "$LETSENCRYPT_DIR/live" ] && [ ! -r "$LETSENCRYPT_DIR/live" ]; then
+  echo "ERROR: Cannot inspect $LETSENCRYPT_DIR/live as a non-root user." >&2
+  echo "       Install deploy/setup-user.sh or run setup-nginx.sh as root." >&2
+  exit 1
+fi
 
 TLS_READY=1
 for domain in "$API_DOMAIN" "$APP_DOMAIN" "$API_DOMAIN-rsa" "$APP_DOMAIN-rsa"; do
@@ -91,7 +103,7 @@ echo "    SSE_CONN_LIMIT: $SSE_CONN_LIMIT"
 VARS='${APP_DOMAIN} ${API_DOMAIN} ${PORT_API} ${PORT_FRONTEND} ${SSE_CONN_LIMIT} ${BOOTSTRAP_DOMAIN} ${BOOTSTRAP_LISTEN_OPTIONS}'
 
 # Generate API config. A fresh host gets an HTTP-only bootstrap until all four
-# certificate lineages exist; this lets certbot validate through webroot.
+# certificate lineages exist; this lets certbot validate through HTTP.
 if [ "$TLS_READY" -eq 1 ]; then
   envsubst "$VARS" < "$TEMPLATE_DIR/api.conf.template" \
     > "$TEMPLATE_DIR/$API_DOMAIN.conf"
@@ -216,12 +228,12 @@ echo ""
 echo "==> Next steps:"
 if [ "$TLS_READY" -eq 0 ]; then
   echo "    TLS certificates are not complete; HTTP bootstrap remains active."
-  echo "    1. Obtain ECDSA certificates with the webroot bootstrap:"
-  echo "       sudo wrzdj-certbot certonly --webroot -w /var/www/html --cert-name $API_DOMAIN --key-type ecdsa -d $API_DOMAIN"
-  echo "       sudo wrzdj-certbot certonly --webroot -w /var/www/html --cert-name $APP_DOMAIN --key-type ecdsa -d $APP_DOMAIN"
+  echo "    1. Obtain ECDSA certificates with the HTTP bootstrap:"
+  echo "       sudo wrzdj-certbot --nginx --cert-name $API_DOMAIN --key-type ecdsa -d $API_DOMAIN"
+  echo "       sudo wrzdj-certbot --nginx --cert-name $APP_DOMAIN --key-type ecdsa -d $APP_DOMAIN"
   echo "    2. Obtain RSA compatibility certificates:"
-  echo "       sudo wrzdj-certbot certonly --webroot -w /var/www/html --cert-name $API_DOMAIN-rsa --key-type rsa -d $API_DOMAIN"
-  echo "       sudo wrzdj-certbot certonly --webroot -w /var/www/html --cert-name $APP_DOMAIN-rsa --key-type rsa -d $APP_DOMAIN"
+  echo "       sudo wrzdj-certbot --nginx --cert-name $API_DOMAIN-rsa --key-type rsa -d $API_DOMAIN"
+  echo "       sudo wrzdj-certbot --nginx --cert-name $APP_DOMAIN-rsa --key-type rsa -d $APP_DOMAIN"
   echo "    3. Re-run setup-nginx.sh to install HTTPS vhosts."
 else
   echo "    1. Verify: curl -I https://$API_DOMAIN/health"
