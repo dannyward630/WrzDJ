@@ -63,6 +63,7 @@ class TestCallSpotifyApi:
         results = _call_spotify_api("deadmau5 strobe")
 
         assert len(results) == 2
+        mock_sp.search.assert_called_once_with(q="deadmau5 strobe", type="track", limit=10)
         assert results[0].title == "Strobe"
         assert results[0].artist == "deadmau5"
         assert results[0].spotify_id == "abc123"

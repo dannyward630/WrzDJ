@@ -107,7 +107,7 @@ def _call_spotify_api(query: str) -> list[SearchResult]:
 
     for attempt in range(MAX_RETRIES + 1):
         try:
-            response = sp.search(q=query, type="track", limit=20)
+            response = sp.search(q=query, type="track", limit=10)
             break
         except (Timeout, ReadTimeout) as e:
             last_exception = e
