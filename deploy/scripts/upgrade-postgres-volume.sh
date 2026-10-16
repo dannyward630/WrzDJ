@@ -267,7 +267,10 @@ echo "    The dump will be kept in $DUMP_FILE"
 # --- 2. Stop the stack, dump, back up (the volume is not modified) ------------
 RUNNING=$(compose ps --services --status running | tr '\n' ' ')
 trap 'docker rm --force "$LEGACY_CONTAINER" "$NEW_CONTAINER" >/dev/null 2>&1 || true' EXIT
-trap 'echo "Interrupted." >&2' INT TERM
+abort_on_int() { echo "Interrupted." >&2; exit 130; }
+abort_on_term() { echo "Interrupted." >&2; exit 143; }
+trap abort_on_int INT
+trap abort_on_term TERM
 compose stop >/dev/null
 # Each step runs in a subshell at top level: errexit is fully active there, but
 # is suppressed inside anything called from `if` or `||`.
