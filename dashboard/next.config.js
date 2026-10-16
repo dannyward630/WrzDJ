@@ -4,10 +4,10 @@ const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 const csp = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
+  "script-src 'self' 'unsafe-inline' https://js-cdn.music.apple.com",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
-  `connect-src 'self' ${apiUrl}`,
+  `connect-src 'self' ${apiUrl} https://api.music.apple.com`,
   "font-src 'self'",
   "frame-ancestors 'none'",
 ].join('; ');

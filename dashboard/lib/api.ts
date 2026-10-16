@@ -27,6 +27,8 @@ import type {
   BeatportEventSettings,
   BeatportSearchResult,
   BeatportStatus,
+  AppleMusicStatus,
+  AppleMusicDeveloperToken,
   BridgeCommandResponse,
   BuildSetResponse,
   BuilderPlaylists,
@@ -146,6 +148,8 @@ export type {
   BeatportEventSettings,
   BeatportSearchResult,
   BeatportStatus,
+  AppleMusicStatus,
+  AppleMusicDeveloperToken,
   BridgeCommandResponse,
   BridgeEnrichedStatus,
   BuildSetResponse,
@@ -1465,6 +1469,25 @@ class ApiClient {
   }
 
   // ========== Tidal Integration ==========
+
+  async getAppleMusicStatus(): Promise<AppleMusicStatus> {
+    return this.fetch('/api/apple-music/status');
+  }
+
+  async getAppleMusicDeveloperToken(): Promise<AppleMusicDeveloperToken> {
+    return this.fetch('/api/apple-music/developer-token');
+  }
+
+  async linkAppleMusicAccount(musicUserToken: string): Promise<AppleMusicStatus> {
+    return this.fetch('/api/apple-music/link', {
+      method: 'POST',
+      body: JSON.stringify({ music_user_token: musicUserToken }),
+    });
+  }
+
+  async disconnectAppleMusicAccount(): Promise<void> {
+    await this.fetch('/api/apple-music/disconnect', { method: 'POST' });
+  }
 
   /**
    * Get Tidal account status for current user.
