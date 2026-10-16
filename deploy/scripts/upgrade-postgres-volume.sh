@@ -40,6 +40,8 @@ MARKER=.wrzdj-postgres-upgrade # keep in sync with check-postgres-volume.sh
 PG16_IMAGE=postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
 
 compose() { docker compose "${COMPOSE_ARGS[@]}" "$@"; }
+STRAY_ID=
+trap '[ -n "$STRAY_ID" ] && docker rm --force "$STRAY_ID" >/dev/null 2>&1 || true' EXIT
 die() {
   echo "ERROR: $*" >&2
   exit 1
@@ -59,10 +61,12 @@ on_volumes() { # SNIPPET MOUNT...
 read_service() {
   local id environment
   id=$(compose run --detach --no-deps --entrypoint sleep db 60)
+  STRAY_ID=$id
   VOLUME=$(docker inspect --format \
     '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql"}}{{.Name}}{{end}}{{end}}' "$id")
   environment=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$id")
   docker rm --force "$id" >/dev/null
+  STRAY_ID=
   DB_USER=$(sed -n 's/^POSTGRES_USER=//p' <<<"$environment")
   DB_USER=${DB_USER:-postgres}
   DB_NAME=$(sed -n 's/^POSTGRES_DB=//p' <<<"$environment")
@@ -264,10 +268,33 @@ echo "==> Upgrading PostgreSQL $OLD_MAJOR -> $NEW_MAJOR (volume $VOLUME)..."
 echo "    Old data files will be kept in the Docker volume $BACKUP_VOLUME"
 echo "    The dump will be kept in $DUMP_FILE"
 
+PHASE=pre
+abort_upgrade() { # STATUS
+  local status=$1
+  trap '' INT TERM
+  echo "Interrupted." >&2
+  docker rm --force "$LEGACY_CONTAINER" "$NEW_CONTAINER" >/dev/null 2>&1 || true
+  case "$PHASE" in
+    dumping)
+      docker volume rm "$BACKUP_VOLUME" >/dev/null 2>&1 || true
+      restart_previous
+      ;;
+    replacing)
+      if roll_back; then restart_previous; fi
+      ;;
+    *)
+      restart_previous
+      ;;
+  esac
+  exit "$status"
+}
+
 # --- 2. Stop the stack, dump, back up (the volume is not modified) ------------
 RUNNING=$(compose ps --services --status running | tr '\n' ' ')
 trap 'docker rm --force "$LEGACY_CONTAINER" "$NEW_CONTAINER" >/dev/null 2>&1 || true' EXIT
-trap 'echo "Interrupted." >&2' INT TERM
+trap 'abort_upgrade 130' INT
+trap 'abort_upgrade 143' TERM
+PHASE=dumping
 compose stop >/dev/null
 # Each step runs in a subshell at top level: errexit is fully active there, but
 # is suppressed inside anything called from `if` or `||`.
@@ -287,6 +314,7 @@ if [ "$STEP" -ne 0 ]; then
 fi
 
 # --- 3. Replace the cluster; any failure restores the old files ---------------
+PHASE=replacing
 set +e
 (
   set -e
@@ -300,5 +328,6 @@ if [ "$STEP" -ne 0 ]; then
   exit 1
 fi
 
+PHASE="done"
 echo "==> PostgreSQL upgraded to $NEW_MAJOR."
 echo "    Once you are satisfied, reclaim the space with: docker volume rm $BACKUP_VOLUME"
