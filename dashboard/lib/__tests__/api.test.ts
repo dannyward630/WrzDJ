@@ -432,9 +432,11 @@ describe('ApiClient', () => {
       expect(result.total).toBe(1);
 
       const [url] = mockFetch.mock.calls[0];
-      expect(url).toContain('/api/public/e/ABC123/history');
-      expect(url).toContain('limit=10');
-      expect(url).toContain('offset=0');
+      // Regression for the substring assertion in 43bd5021 (#800).
+      const requestUrl = new URL(url);
+      expect(requestUrl.pathname).toBe('/api/public/e/ABC123/history');
+      expect(requestUrl.searchParams.get('limit')).toBe('100');
+      expect(requestUrl.searchParams.get('offset')).toBe('0');
     });
 
     it('fetches play history with custom limit and offset', async () => {
