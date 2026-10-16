@@ -156,7 +156,7 @@ grep -Fq "certbot_args+=(\"--cert-name\" \"\$cert_name\")" \
   "$repo_root/deploy/setup-user.sh"
 grep -Fq "certbot_args+=(\"--key-type\" \"\$key_type\")" \
   "$repo_root/deploy/setup-user.sh"
-grep -Fq 'wrzdj-certbot --nginx --cert-name api.example.test-rsa --key-type rsa -d api.example.test' \
+grep -Fq 'wrzdj-certbot --nginx --agree-tos --email admin@yourdomain.com --cert-name api.example.test-rsa --key-type rsa -d api.example.test' \
   "$tmp_dir/setup.log"
 
 wrapper="$tmp_dir/wrzdj-certbot"
