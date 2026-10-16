@@ -161,6 +161,7 @@ def account_status(db: Session, user: User) -> dict[str, object]:
         try:
             token, storefront = apple_music_storage.read_stored_connection(db, user)
         except apple_music_tokens.AppleMusicNotConnected:
+            db.commit()
             connection = _connection(db, user, populate_existing=True)
     if configured and token and connection and connection.connection_state == "connected":
         generation = connection.authorization_generation

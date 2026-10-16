@@ -149,6 +149,34 @@ def test_account_status_rechecks_the_saved_user_token(db, test_user, monkeypatch
     }
 
 
+def test_account_status_commits_reauthorization_from_storage(db, test_user, monkeypatch):
+    connection = _connected_connection(db, test_user)
+    monkeypatch.setattr(apple_music_tokens, "is_configured", lambda: False)
+
+    def mark_reauthorization_without_committing(session, user):
+        stored = session.query(UserProviderConnection).filter_by(user_id=user.id).one()
+        stored.connection_state = "reauthorize"
+        raise apple_music_tokens.AppleMusicNotConnected
+
+    monkeypatch.setattr(
+        apple_music_accounts.apple_music_storage,
+        "read_stored_connection",
+        mark_reauthorization_without_committing,
+    )
+
+    status = apple_music_accounts.account_status(db, test_user)
+
+    assert status == {
+        "configured": False,
+        "linked": False,
+        "requires_reauthorization": True,
+        "storefront": None,
+    }
+    assert db.query(UserProviderConnection).filter_by(id=connection.id).one().connection_state == (
+        "reauthorize"
+    )
+
+
 def test_stale_apple_403_does_not_revoke_a_newer_reconnection(db, test_user, monkeypatch):
     connection = _connected_connection(db, test_user)
     initial_generation = connection.authorization_generation
