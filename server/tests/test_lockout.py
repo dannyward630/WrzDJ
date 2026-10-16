@@ -87,6 +87,26 @@ class TestLockoutManager:
         locked, _ = mgr.is_locked_out("1.2.3.4", None)
         assert locked is True
 
+    def test_combined_failure_updates_independent_ip_and_username_keys(self):
+        # Regression for 7aa41092 / #812: combined input must update independent keys.
+        mgr = self._make_manager()
+        for _ in range(4):
+            mgr.record_failure("1.2.3.4", "alice")
+
+        assert mgr.is_locked_out("1.2.3.4", "carol")[0] is False
+        assert mgr.is_locked_out("5.6.7.8", "alice")[0] is False
+
+        result = mgr.record_failure("1.2.3.4", "alice")
+        assert result == (True, 5 * 60)
+
+        locked_by_ip, _ = mgr.is_locked_out("1.2.3.4", "carol")
+        locked_by_username, _ = mgr.is_locked_out("5.6.7.8", "alice")
+        unrelated, _ = mgr.is_locked_out("5.6.7.8", "carol")
+
+        assert locked_by_ip is True
+        assert locked_by_username is True
+        assert unrelated is False
+
     def test_username_lockout_independent_of_ip(self):
         mgr = self._make_manager()
         # Lock out username from different IPs
