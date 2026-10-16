@@ -112,6 +112,7 @@ from app.schemas.setbuilder import (
     VibeWindowsPut,
     VibeWindowsResponse,
 )
+from app.services import apple_music_accounts, apple_music_catalog, apple_music_tokens
 from app.services.bridge_integration import queue_command
 from app.services.llm.exceptions import NoLlmConfigured
 from app.services.now_playing import get_now_playing
@@ -1722,7 +1723,9 @@ async def enrich_pool_vibes(
 
 def _unresolved_out(
     tracks: list[export_common.ExportTrack],
-    reason: Literal["no_tidal_match", "no_spotify_match", "missing_metadata"],
+    reason: Literal[
+        "no_tidal_match", "no_spotify_match", "no_apple_music_match", "missing_metadata"
+    ],
 ) -> list[UnresolvedTrackOut]:
     return [
         UnresolvedTrackOut(
@@ -1752,7 +1755,14 @@ _UNRESOLVED_409_RESPONSE = {
 }
 
 
-@router.post("/sets/{set_id}/export/preflight", response_model=ExportPreflightOut)
+@router.post(
+    "/sets/{set_id}/export/preflight",
+    response_model=ExportPreflightOut,
+    responses={
+        502: {"description": "Apple Music catalog lookup failed."},
+        503: {"description": "Apple Music is not configured."},
+    },
+)
 @limiter.limit("5/minute")
 def export_preflight(
     set_id: int,
@@ -1803,6 +1813,37 @@ def export_preflight(
             resolved_count=len(resolved),
             unresolved=_unresolved_out(unresolved, "no_spotify_match"),
             spotify_connected=True,
+        )
+
+    if payload.target == "apple_music":
+        if not apple_music_tokens.is_configured():
+            raise HTTPException(status_code=503, detail="Apple Music is not configured")
+        try:
+            apple_music_accounts.stored_connection(db, current_user)
+        except apple_music_tokens.AppleMusicNotConnected:
+            return ExportPreflightOut(
+                target=payload.target,
+                source=source,
+                total=len(tracks),
+                resolved_count=0,
+                unresolved=[],
+                apple_music_connected=False,
+            )
+        try:
+            resolved, unresolved = apple_music_catalog.resolve_tracks(db, current_user, tracks)
+        except apple_music_tokens.AppleMusicNotConfigured:
+            raise HTTPException(status_code=503, detail="Apple Music is not configured") from None
+        except apple_music_tokens.AppleMusicError:
+            raise HTTPException(
+                status_code=502, detail="Apple Music catalog lookup failed"
+            ) from None
+        return ExportPreflightOut(
+            target=payload.target,
+            source=source,
+            total=len(tracks),
+            resolved_count=len(resolved),
+            unresolved=_unresolved_out(unresolved, "no_apple_music_match"),
+            apple_music_connected=True,
         )
 
     unresolved = export_files.file_unresolved(tracks)
