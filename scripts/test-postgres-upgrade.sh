@@ -32,6 +32,11 @@ legacy_network="${project}-legacy"
 legacy_db="${project}-legacy-db"
 legacy_api="${project}-legacy-api"
 restored_api="${project}-restored-api"
+quoted_project="${project}-quoted"
+quoted_volume="${quoted_project}_postgres_data"
+quoted_backup_volume="${quoted_volume}_pg16_backup"
+quoted_legacy="${quoted_project}-legacy"
+quoted_override="$scratch/quoted-role.yml"
 
 # Dummy values for every required variable in the production Compose files.
 export COMPOSE_PROJECT_NAME="$project"
@@ -52,13 +57,20 @@ cleanup() {
     compose logs --tail 40 db >&2 2>/dev/null || true
   fi
   docker rm --force "$legacy_api" "$restored_api" "$legacy_db" >/dev/null 2>&1 || true
+  docker rm --force "$quoted_legacy" >/dev/null 2>&1 || true
+  env COMPOSE_PROJECT_NAME="$quoted_project" POSTGRES_USER='App-User' \
+    POSTGRES_PASSWORD=quoted-pass POSTGRES_DB=appdb POSTGRES_VOLUME_NAME="$quoted_volume" \
+    docker compose -f "$compose_file" -f "$quoted_override" down --volumes --remove-orphans \
+    >/dev/null 2>&1 || true
   compose down --volumes --remove-orphans >/dev/null 2>&1 || true
   POSTGRES_VOLUME_NAME="$probe_volume" compose down --remove-orphans >/dev/null 2>&1 || true
   docker rm --force "${legacy_volume}-pg16-upgrade-old" "${legacy_volume}-pg16-upgrade-new" >/dev/null 2>&1 || true
   docker rm --force "${directory_volume}-pg16-upgrade-old" "${directory_volume}-pg16-upgrade-new" >/dev/null 2>&1 || true
+  docker rm --force "${quoted_volume}-pg16-upgrade-old" "${quoted_volume}-pg16-upgrade-new" >/dev/null 2>&1 || true
   docker volume ls --quiet --filter "name=${legacy_volume}_interrupted_" | xargs -r docker volume rm >/dev/null 2>&1 || true
   docker volume ls --quiet --filter "name=${directory_volume}_interrupted_" | xargs -r docker volume rm >/dev/null 2>&1 || true
-  docker volume rm "$legacy_volume" "$backup_volume" "$directory_volume" "$directory_backup_volume" "$probe_volume" >/dev/null 2>&1 || true
+  docker volume rm "$legacy_volume" "$backup_volume" "$directory_volume" "$directory_backup_volume" \
+    "$probe_volume" "$quoted_volume" "$quoted_backup_volume" >/dev/null 2>&1 || true
   docker network rm "$legacy_network" >/dev/null 2>&1 || true
   rm -rf "$scratch"
   exit "$status"
@@ -107,9 +119,10 @@ done
 
 # --- helpers ------------------------------------------------------------------
 wait_ready() { # CONTAINER
+  local username=${2:-wrzdj}
   for ((attempt = 0; attempt < 60; attempt++)); do
     # TCP, not the socket: the entrypoint's temporary init server is socket-only.
-    if docker exec "$1" pg_isready --quiet --host 127.0.0.1 --username wrzdj; then return 0; fi
+    if docker exec "$1" pg_isready --quiet --host 127.0.0.1 --username "$username"; then return 0; fi
     sleep 1
   done
   fail "$1 did not accept connections"
@@ -342,3 +355,45 @@ start_legacy_db "$backup_volume"
 [ "$(docker exec "$legacy_db" psql -U wrzdj -d wrzdj -At -c "$fingerprint_sql")" = "$before" ] ||
   fail 'the backup volume is not a readable copy of the PostgreSQL 16 data'
 echo 'The automatic upgrade recovers an interrupted run, preserves the cluster and keeps a working backup.'
+
+# --- 8. Quoted application roles restore successfully -------------------------
+# Regression for #816 (offending 72b86c7c): pg_dumpall quotes an application
+# role when its name contains punctuation or uppercase letters. The restore
+# must remove that exact role statement while retaining identical table data.
+cat >"$quoted_override" <<YAML
+services:
+  db:
+    environment:
+      POSTGRES_USER: App-User
+      POSTGRES_PASSWORD: quoted-pass
+      POSTGRES_DB: appdb
+networks:
+  default:
+    external: true
+    name: ${project}_default
+YAML
+docker volume create "$quoted_volume" >/dev/null
+docker run --detach --name "$quoted_legacy" --env POSTGRES_USER='App-User' \
+  --env POSTGRES_PASSWORD=quoted-pass --env POSTGRES_DB=appdb \
+  --volume "$quoted_volume:/var/lib/postgresql/data" "$legacy_image" >/dev/null
+wait_ready "$quoted_legacy" 'App-User'
+docker exec "$quoted_legacy" psql -U 'App-User' -d appdb -v ON_ERROR_STOP=1 -q -c \
+  'CREATE TABLE role_text (body text); INSERT INTO role_text VALUES ('\''CREATE ROLE "App-User";'\'')'
+docker stop "$quoted_legacy" >/dev/null
+docker rm "$quoted_legacy" >/dev/null
+env COMPOSE_PROJECT_NAME="$quoted_project" POSTGRES_USER='App-User' \
+  POSTGRES_PASSWORD=quoted-pass POSTGRES_DB=appdb POSTGRES_VOLUME_NAME="$quoted_volume" \
+  POSTGRES_UPGRADE_BACKUP_DIR="$scratch/quoted-backups" \
+  bash "$upgrade" "$compose_file" "$quoted_override" >"$scratch/quoted-upgrade.log" 2>&1 ||
+  fail "quoted application role upgrade failed: $(cat "$scratch/quoted-upgrade.log")"
+quoted_compose() {
+  env COMPOSE_PROJECT_NAME="$quoted_project" POSTGRES_USER='App-User' \
+    POSTGRES_PASSWORD=quoted-pass POSTGRES_DB=appdb POSTGRES_VOLUME_NAME="$quoted_volume" \
+    docker compose -f "$compose_file" -f "$quoted_override" "$@"
+}
+quoted_compose up --detach --wait db >/dev/null || fail 'quoted-role PostgreSQL 18 did not start'
+[ "$(quoted_compose exec -T db psql -U 'App-User' -d appdb -At -c 'SELECT * FROM role_text')" = \
+  'CREATE ROLE "App-User";' ] || fail 'quoted-role restore altered role-like table data'
+[ "$(quoted_compose exec -T db psql -U 'App-User' -d appdb -At -c 'SHOW server_version_num' | cut -c1-2)" = 18 ] ||
+  fail 'quoted-role upgrade did not produce PostgreSQL 18 data'
+echo 'Quoted application roles restore successfully and preserve role-like table data.'
