@@ -143,6 +143,21 @@ describe('verifyToken', () => {
     await expect(verifyToken('https://api.wrzdj.com', 'malformed'))
       .rejects.toThrow('invalid username');
   });
+
+  it.each([
+    ['null', null],
+    ['primitive', 'admin'],
+    ['array', ['admin']],
+    ['missing username', {}],
+    ['wrong username type', { username: 42 }],
+    ['blank username', { username: '   ' }],
+  ])('reports malformed verification body for %s', async (_label, body) => {
+    // Regression for 0eb467c7: malformed verification bodies must have a stable error.
+    mockFetch.mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(body) });
+
+    await expect(verifyToken('https://api.wrzdj.com', 'malformed-token'))
+      .rejects.toThrow('Token verification returned an invalid username');
+  });
 });
 
 describe('buildAuthState', () => {

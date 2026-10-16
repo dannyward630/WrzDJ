@@ -64,11 +64,15 @@ export async function verifyToken(
     if (!response.ok) {
       throw new Error(`Token verification failed (${response.status})`);
     }
-    const data = await response.json();
-    if (typeof data.username !== 'string' || data.username.length === 0) {
+    const data: unknown = await response.json();
+    const username =
+      data !== null && typeof data === 'object' && !Array.isArray(data) && 'username' in data
+        ? data.username
+        : undefined;
+    if (typeof username !== 'string' || username.trim().length === 0) {
       throw new Error('Token verification returned an invalid username');
     }
-    return data.username;
+    return username;
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Token verification')) {
       throw error;
