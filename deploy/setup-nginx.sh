@@ -19,6 +19,7 @@ NGINX_ETC_DIR="${NGINX_ETC_DIR:-/etc/nginx}"
 NGINX_SITES_AVAILABLE="$NGINX_ETC_DIR/sites-available"
 NGINX_SITES_ENABLED="$NGINX_ETC_DIR/sites-enabled"
 NGINX_CONF_D="$NGINX_ETC_DIR/conf.d"
+LETSENCRYPT_DIR="${LETSENCRYPT_DIR:-/etc/letsencrypt}"
 
 # Use sudo only when not running as root
 SUDO=""
@@ -48,6 +49,20 @@ export SSE_CONN_LIMIT="${SSE_CONN_LIMIT:-500}"
 export APP_DOMAIN
 export API_DOMAIN
 
+certificates_ready() {
+  local domain="$1"
+  [ -s "$LETSENCRYPT_DIR/live/$domain/fullchain.pem" ] &&
+    [ -s "$LETSENCRYPT_DIR/live/$domain/privkey.pem" ]
+}
+
+TLS_READY=1
+for domain in "$API_DOMAIN" "$APP_DOMAIN" "$API_DOMAIN-rsa" "$APP_DOMAIN-rsa"; do
+  if ! certificates_ready "$domain"; then
+    TLS_READY=0
+    break
+  fi
+done
+
 # Validate port numbers
 validate_port() {
   local port="$1" name="$2"
@@ -73,21 +88,42 @@ echo "    SSE_CONN_LIMIT: $SSE_CONN_LIMIT"
 
 # envsubst only replaces the variables we specify, leaving nginx $vars untouched
 # shellcheck disable=SC2016
-VARS='${APP_DOMAIN} ${API_DOMAIN} ${PORT_API} ${PORT_FRONTEND} ${SSE_CONN_LIMIT}'
+VARS='${APP_DOMAIN} ${API_DOMAIN} ${PORT_API} ${PORT_FRONTEND} ${SSE_CONN_LIMIT} ${BOOTSTRAP_DOMAIN} ${BOOTSTRAP_LISTEN_OPTIONS}'
 
-# Generate API config
-envsubst "$VARS" < "$TEMPLATE_DIR/api.conf.template" \
-  > "$TEMPLATE_DIR/$API_DOMAIN.conf"
+# Generate API config. A fresh host gets an HTTP-only bootstrap until all four
+# certificate lineages exist; this lets certbot validate through webroot.
+if [ "$TLS_READY" -eq 1 ]; then
+  envsubst "$VARS" < "$TEMPLATE_DIR/api.conf.template" \
+    > "$TEMPLATE_DIR/$API_DOMAIN.conf"
+else
+  export BOOTSTRAP_DOMAIN="$API_DOMAIN"
+  export BOOTSTRAP_LISTEN_OPTIONS=""
+  envsubst "$VARS" < "$TEMPLATE_DIR/bootstrap.conf.template" \
+    > "$TEMPLATE_DIR/$API_DOMAIN.conf"
+fi
 echo "    Generated: $TEMPLATE_DIR/$API_DOMAIN.conf"
 
 # Generate frontend config
-envsubst "$VARS" < "$TEMPLATE_DIR/app.conf.template" \
-  > "$TEMPLATE_DIR/$APP_DOMAIN.conf"
+if [ "$TLS_READY" -eq 1 ]; then
+  envsubst "$VARS" < "$TEMPLATE_DIR/app.conf.template" \
+    > "$TEMPLATE_DIR/$APP_DOMAIN.conf"
+else
+  export BOOTSTRAP_DOMAIN="$APP_DOMAIN"
+  envsubst "$VARS" < "$TEMPLATE_DIR/bootstrap.conf.template" \
+    > "$TEMPLATE_DIR/$APP_DOMAIN.conf"
+fi
 echo "    Generated: $TEMPLATE_DIR/$APP_DOMAIN.conf"
 
 # Generate default catch-all server block
-envsubst "$VARS" < "$TEMPLATE_DIR/default.conf.template" \
-  > "$TEMPLATE_DIR/default.conf"
+if [ "$TLS_READY" -eq 1 ]; then
+  envsubst "$VARS" < "$TEMPLATE_DIR/default.conf.template" \
+    > "$TEMPLATE_DIR/default.conf"
+else
+  export BOOTSTRAP_DOMAIN="_"
+  export BOOTSTRAP_LISTEN_OPTIONS=" default_server"
+  envsubst "$VARS" < "$TEMPLATE_DIR/bootstrap.conf.template" \
+    > "$TEMPLATE_DIR/default.conf"
+fi
 echo "    Generated: $TEMPLATE_DIR/default.conf"
 
 # Install to nginx if running as root / with sudo
@@ -136,10 +172,14 @@ if [ -d "$NGINX_SITES_AVAILABLE" ]; then
   echo ""
   echo "==> Testing nginx config"
   if $SUDO nginx -t; then
-    echo ""
-    echo "==> Reloading nginx"
-    $SUDO systemctl reload nginx
-    echo "    Done!"
+    if $SUDO systemctl is-active --quiet nginx; then
+      echo ""
+      echo "==> Reloading nginx"
+      $SUDO systemctl reload nginx
+      echo "    Done!"
+    else
+      echo "    nginx is not active; start it after reviewing the generated config."
+    fi
   else
     echo ""
     echo "ERROR: nginx config test failed. Fix the errors above before reloading."
@@ -174,10 +214,17 @@ fi
 
 echo ""
 echo "==> Next steps:"
-echo "    1. Set up ECDSA SSL: sudo wrzdj-certbot --nginx --cert-name $API_DOMAIN --key-type ecdsa -d $API_DOMAIN"
-echo "       sudo wrzdj-certbot --nginx --cert-name $APP_DOMAIN --key-type ecdsa -d $APP_DOMAIN"
-echo "    2. Set up RSA compatibility SSL: sudo wrzdj-certbot --nginx --cert-name $API_DOMAIN-rsa --key-type rsa -d $API_DOMAIN"
-echo "       sudo wrzdj-certbot --nginx --cert-name $APP_DOMAIN-rsa --key-type rsa -d $APP_DOMAIN"
-echo "    3. Verify: curl -I https://$API_DOMAIN/health"
-echo "    4. Verify JSON logs: tail -1 /var/log/nginx/$API_DOMAIN.access.log | python3 -m json.tool"
-echo "    5. Analytics: ./deploy/scripts/analytics.sh --api"
+if [ "$TLS_READY" -eq 0 ]; then
+  echo "    TLS certificates are not complete; HTTP bootstrap remains active."
+  echo "    1. Obtain ECDSA certificates with the webroot bootstrap:"
+  echo "       sudo wrzdj-certbot certonly --webroot -w /var/www/html --cert-name $API_DOMAIN --key-type ecdsa -d $API_DOMAIN"
+  echo "       sudo wrzdj-certbot certonly --webroot -w /var/www/html --cert-name $APP_DOMAIN --key-type ecdsa -d $APP_DOMAIN"
+  echo "    2. Obtain RSA compatibility certificates:"
+  echo "       sudo wrzdj-certbot certonly --webroot -w /var/www/html --cert-name $API_DOMAIN-rsa --key-type rsa -d $API_DOMAIN"
+  echo "       sudo wrzdj-certbot certonly --webroot -w /var/www/html --cert-name $APP_DOMAIN-rsa --key-type rsa -d $APP_DOMAIN"
+  echo "    3. Re-run setup-nginx.sh to install HTTPS vhosts."
+else
+  echo "    1. Verify: curl -I https://$API_DOMAIN/health"
+  echo "    2. Verify JSON logs: tail -1 /var/log/nginx/$API_DOMAIN.access.log | python3 -m json.tool"
+  echo "    3. Analytics: ./deploy/scripts/analytics.sh --api"
+fi

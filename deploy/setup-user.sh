@@ -144,7 +144,7 @@ chown root:wrzdj /usr/local/bin/wrzdj-nginx-install
 cat > /usr/local/bin/wrzdj-certbot << 'WRAPPER'
 #!/bin/bash
 set -euo pipefail
-# Run certbot with restricted operations (no hooks allowed)
+# Run certbot with restricted operations (no hooks or arbitrary webroot allowed)
 case "${1:-}" in
   --nginx)
     shift
@@ -186,6 +186,58 @@ case "${1:-}" in
     fi
     exec /usr/bin/certbot --nginx --non-interactive "${certbot_args[@]}" "${domains[@]}"
     ;;
+  certonly)
+    shift
+    domains=()
+    certbot_args=()
+    webroot_path=""
+    while [ $# -gt 0 ]; do
+      if [ "$1" = "--webroot" ]; then
+        certbot_args+=("--webroot")
+        shift
+      elif [ "$1" = "-w" ] && [ $# -gt 1 ]; then
+        webroot_path="$2"
+        if [ "$webroot_path" != "/var/www/html" ]; then
+          echo "ERROR: Webroot must be /var/www/html" >&2
+          exit 1
+        fi
+        certbot_args+=("--webroot-path" "$webroot_path")
+        shift 2
+      elif [ "$1" = "-d" ] && [ $# -gt 1 ]; then
+        domain="$2"
+        if [[ ! "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]]; then
+          echo "ERROR: Invalid domain: $domain" >&2
+          exit 1
+        fi
+        domains+=("-d" "$domain")
+        shift 2
+      elif [ "$1" = "--cert-name" ] && [ $# -gt 1 ]; then
+        cert_name="$2"
+        if [[ ! "$cert_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]; then
+          echo "ERROR: Invalid certificate name: $cert_name" >&2
+          exit 1
+        fi
+        certbot_args+=("--cert-name" "$cert_name")
+        shift 2
+      elif [ "$1" = "--key-type" ] && [ $# -gt 1 ]; then
+        key_type="$2"
+        if [ "$key_type" != "ecdsa" ] && [ "$key_type" != "rsa" ]; then
+          echo "ERROR: Invalid key type: $key_type" >&2
+          exit 1
+        fi
+        certbot_args+=("--key-type" "$key_type")
+        shift 2
+      else
+        echo "ERROR: Unexpected argument: $1" >&2
+        exit 1
+      fi
+    done
+    if [ -z "$webroot_path" ] || [ ${#domains[@]} -eq 0 ]; then
+      echo "Usage: wrzdj-certbot certonly --webroot -w /var/www/html -d domain" >&2
+      exit 1
+    fi
+    exec /usr/bin/certbot certonly --non-interactive "${certbot_args[@]}" "${domains[@]}"
+    ;;
   renew)
     if [ "${2:-}" = "--dry-run" ]; then
       exec /usr/bin/certbot renew --dry-run
@@ -193,7 +245,7 @@ case "${1:-}" in
     exec /usr/bin/certbot renew
     ;;
   *)
-    echo "Usage: wrzdj-certbot {--nginx -d domain [...] | renew [--dry-run]}" >&2
+    echo "Usage: wrzdj-certbot {--nginx -d domain [...] | certonly --webroot -w /var/www/html -d domain | renew [--dry-run]}" >&2
     exit 1
     ;;
 esac
@@ -243,6 +295,7 @@ wrzdj ALL=(root) NOPASSWD: /usr/sbin/nginx -t
 
 # nginx service management
 wrzdj ALL=(root) NOPASSWD: /usr/bin/systemctl reload nginx
+wrzdj ALL=(root) NOPASSWD: /usr/bin/systemctl is-active --quiet nginx
 wrzdj ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx
 wrzdj ALL=(root) NOPASSWD: /usr/bin/systemctl status nginx
 

@@ -354,3 +354,6 @@ jobs:
 
       - name: Test development proxy runtime
         run: bash scripts/test-proxy-image.sh wrzdj-proxy:smoke
+
+      - name: Test production nginx provisioning
+        run: bash deploy/tests/test_setup_nginx.sh
