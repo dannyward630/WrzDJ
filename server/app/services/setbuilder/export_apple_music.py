@@ -1,12 +1,13 @@
 """Apple Music playlist export for WrzDJSet."""
 
+import logging
 import re
 import time
 from dataclasses import dataclass
 from urllib.parse import parse_qs, quote, urlsplit
 from uuid import uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -19,7 +20,8 @@ from app.services.setbuilder.export_common import ExportTrack
 
 _PLAYLIST_ID_RE = re.compile(r"^p\.[A-Za-z0-9_-]{1,98}$")
 _GLOBAL_ID_RE = re.compile(r"^pl\.[A-Za-z0-9_-]{1,128}$")
-_VERIFY_DELAYS_SECONDS = (0.0, 0.25, 0.75)
+_VERIFY_DELAYS_SECONDS = (0.0, 0.25, 0.75, 1.5, 3.0)
+logger = logging.getLogger(__name__)
 
 
 class AppleMusicWriteUncertain(Exception):
@@ -28,6 +30,10 @@ class AppleMusicWriteUncertain(Exception):
     def __init__(self, playlist_id: str | None = None):
         super().__init__("Apple Music playlist creation could not be confirmed")
         self.playlist_id = playlist_id
+
+
+class AppleMusicExportInProgress(apple_music_tokens.AppleMusicError):
+    """Another request already owns the one-shot playlist creation claim."""
 
 
 @dataclass(frozen=True)
@@ -78,6 +84,11 @@ def _catalog_ids(payload: dict[str, object]) -> tuple[list[str], str | None] | N
         play_params = attributes.get("playParams") if isinstance(attributes, dict) else None
         catalog_id = play_params.get("catalogId") if isinstance(play_params, dict) else None
         if not isinstance(catalog_id, str):
+            relationships = item.get("relationships")
+            catalog = relationships.get("catalog") if isinstance(relationships, dict) else None
+            catalog_data = catalog.get("data") if isinstance(catalog, dict) else None
+            catalog_id = catalog_data.get("id") if isinstance(catalog_data, dict) else None
+        if not isinstance(catalog_id, str):
             return None
         ids.append(catalog_id)
     next_page = payload.get("next")
@@ -93,7 +104,7 @@ def _tracks_match(
 ) -> bool:
     collected: list[str] = []
     offset: str | None = None
-    page_limit = max(1, (len(expected_ids) + 99) // 100)
+    page_limit = max(1, len(expected_ids))
     for _ in range(page_limit):
         params = {"include": "catalog", "limit": "100"}
         if offset:
@@ -181,30 +192,27 @@ def _claim_export(db: Session, set_obj: Set) -> str | None:
     return attempt_id
 
 
-def _stored_recovery_playlist_id(db: Session, set_obj: Set) -> str | None:
-    return db.scalar(
-        select(Set.apple_music_export_recovery_playlist_id).where(
-            Set.id == set_obj.id, Set.apple_music_export_pending.is_(True)
-        )
-    )
-
-
 def _release_claim(db: Session, set_obj: Set, attempt_id: str) -> None:
-    db.execute(
-        update(Set)
-        .where(
-            Set.id == set_obj.id,
-            Set.apple_music_export_pending.is_(True),
-            Set.apple_music_export_attempt_id == attempt_id,
+    set_id = set_obj.id
+    try:
+        db.execute(
+            update(Set)
+            .where(
+                Set.id == set_obj.id,
+                Set.apple_music_export_pending.is_(True),
+                Set.apple_music_export_attempt_id == attempt_id,
+            )
+            .values(
+                apple_music_export_pending=False,
+                apple_music_export_attempt_id=None,
+                apple_music_export_recovery_playlist_id=None,
+            )
+            .execution_options(synchronize_session=False)
         )
-        .values(
-            apple_music_export_pending=False,
-            apple_music_export_attempt_id=None,
-            apple_music_export_recovery_playlist_id=None,
-        )
-        .execution_options(synchronize_session=False)
-    )
-    db.commit()
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("Could not release Apple Music export claim for set %s", set_id)
 
 
 def export_to_apple_music(
@@ -228,7 +236,7 @@ def export_to_apple_music(
     developer_token, _ = apple_music_tokens.create_developer_token()
     attempt_id = _claim_export(db, set_obj)
     if attempt_id is None:
-        raise AppleMusicWriteUncertain(_stored_recovery_playlist_id(db, set_obj))
+        raise AppleMusicExportInProgress("An Apple Music export is already in progress")
     track_data = [{"id": song_id, "type": "songs"} for _, song_id in resolved]
     try:
         payload = apple_music_tokens.apple_post(

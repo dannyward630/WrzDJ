@@ -1976,6 +1976,14 @@ def export_set_apple_music(
         outcome = export_apple_music.export_to_apple_music(db, current_user, set_obj, resolved)
     except apple_music_tokens.AppleMusicNotConnected:
         raise HTTPException(status_code=400, detail="Apple Music account not connected") from None
+    except export_apple_music.AppleMusicExportInProgress:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "apple_music_export_in_progress",
+                "message": "An Apple Music export is already in progress for this set.",
+            },
+        ) from None
     except export_apple_music.AppleMusicWriteUncertain as exc:
         detail = {
             "code": "apple_music_write_uncertain",

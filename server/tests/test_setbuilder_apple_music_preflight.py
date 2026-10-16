@@ -260,3 +260,29 @@ def test_uncertain_export_response_includes_recovery_id_and_never_claims_success
         "message": "Apple Music export could not be confirmed. Do not retry; check your library.",
         "playlist_id": "p.created123",
     }
+
+
+def test_concurrent_export_returns_conflict_without_claiming_an_uncertain_write(
+    client, auth_headers, db, test_user, monkeypatch
+):
+    _connect_dj(db, test_user)
+    set_obj = _set_with_tracks(db, test_user)
+    monkeypatch.setattr(apple_music_tokens, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        apple_music_catalog,
+        "resolve_tracks",
+        lambda *_args: ([(ExportTrack(position=0, title="Found", artist="Artist"), "id")], []),
+    )
+
+    def in_progress(*_args):
+        raise export_apple_music.AppleMusicExportInProgress
+
+    monkeypatch.setattr(export_apple_music, "export_to_apple_music", in_progress)
+    response = client.post(
+        f"/api/setbuilder/sets/{set_obj.id}/export/apple-music",
+        json={},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "apple_music_export_in_progress"
