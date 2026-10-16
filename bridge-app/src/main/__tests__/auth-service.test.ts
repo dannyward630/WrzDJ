@@ -53,6 +53,7 @@ describe('login', () => {
     await expect(login('https://api.wrzdj.com', 'admin', 'pass')).rejects.toThrow('Login failed');
   });
 
+  // Regression for a3e05cb3 / #820: malformed success bodies must not become stored tokens.
   it.each([
     ['empty object', {}],
     ['null body', null],
