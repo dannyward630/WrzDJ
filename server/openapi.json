@@ -877,6 +877,24 @@
         "title": "AgentChatOut",
         "type": "object"
       },
+      "AppleMusicDeveloperTokenOut": {
+        "properties": {
+          "developer_token": {
+            "title": "Developer Token",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "developer_token",
+          "expires_at"
+        ],
+        "title": "AppleMusicDeveloperTokenOut",
+        "type": "object"
+      },
       "AppliedToolCallOut": {
         "description": "One agent tool call, including rationale for mutating tools.",
         "properties": {
@@ -13081,6 +13099,32 @@
         "summary": "Admin Update User",
         "tags": [
           "admin"
+        ]
+      }
+    },
+    "/api/apple-music/developer-token": {
+      "get": {
+        "operationId": "developer_token_api_apple_music_developer_token_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppleMusicDeveloperTokenOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Developer Token",
+        "tags": [
+          "apple-music"
         ]
       }
     },

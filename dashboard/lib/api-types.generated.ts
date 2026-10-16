@@ -475,6 +475,23 @@ export interface paths {
         patch: operations["admin_update_user_api_admin_users__user_id__patch"];
         trace?: never;
     };
+    "/api/apple-music/developer-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Developer Token */
+        get: operations["developer_token_api_apple_music_developer_token_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/email/confirm": {
         parameters: {
             query?: never;
@@ -4237,6 +4254,13 @@ export interface components {
             slots: components["schemas"]["SlotOut"][];
             /** Tool Calls */
             tool_calls: components["schemas"]["AppliedToolCallOut"][];
+        };
+        /** AppleMusicDeveloperTokenOut */
+        AppleMusicDeveloperTokenOut: {
+            /** Developer Token */
+            developer_token: string;
+            /** Expires At */
+            expires_at: number;
         };
         /**
          * AppliedToolCallOut
@@ -8829,6 +8853,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    developer_token_api_apple_music_developer_token_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppleMusicDeveloperTokenOut"];
                 };
             };
         };
