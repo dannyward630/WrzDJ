@@ -10,6 +10,7 @@ before that pin is raised. State is also lost on restart.
 
 import time
 from dataclasses import dataclass
+from math import ceil
 from threading import Lock
 
 
@@ -96,7 +97,7 @@ class LockoutManager:
             for key in keys_to_check:
                 attempt = self._attempts.get(key)
                 if attempt and attempt.lockout_until > now:
-                    remaining = int(attempt.lockout_until - now)
+                    remaining = ceil(attempt.lockout_until - now)
                     max_remaining = max(max_remaining, remaining)
 
             return (max_remaining > 0, max_remaining)
@@ -108,6 +109,7 @@ class LockoutManager:
             Tuple of (is_now_locked, lockout_seconds)
         """
         with self._lock:
+            self._cleanup_old_entries()
             now = time.time()
             keys_to_update = []
             if ip:
@@ -126,13 +128,11 @@ class LockoutManager:
                     )
                 else:
                     attempt = self._attempts[key]
-                    # Reset if lockout has expired
-                    if attempt.lockout_until > 0 and attempt.lockout_until < now:
-                        attempt.count = 1
-                        attempt.first_failure = now
+                    # Preserve the accumulated count across cooldowns so escalation remains
+                    # reachable. The cleanup interval bounds the observation window.
+                    if attempt.lockout_until > 0 and attempt.lockout_until <= now:
                         attempt.lockout_until = 0.0
-                    else:
-                        attempt.count += 1
+                    attempt.count += 1
 
                     # Check thresholds
                     if attempt.count >= self.THRESHOLD_2:

@@ -58,6 +58,20 @@ class TestLockoutManager:
             locked, _ = mgr.is_locked_out("1.2.3.4", "alice")
             assert locked is False
 
+    def test_lockout_stays_active_during_final_fractional_second(self):
+        mgr = self._make_manager()
+        start = time.time()
+        with patch("app.core.lockout.time") as mock_time:
+            mock_time.time.return_value = start
+            for _ in range(5):
+                mgr.record_failure("1.2.3.4", "alice")
+
+            mock_time.time.return_value = start + 5 * 60 - 0.1
+            locked, remaining = mgr.is_locked_out("1.2.3.4", "alice")
+
+        assert locked is True
+        assert remaining == 1
+
     def test_ip_and_username_tracked_separately(self):
         mgr = self._make_manager()
         # Lock out IP
@@ -136,7 +150,7 @@ class TestLockoutManager:
         assert is_now_locked is False, "cleanup erased old entry; count must restart at 1"
         assert lockout_seconds == 0
 
-    def test_record_failure_resets_after_lockout_expires(self):
+    def test_record_failure_preserves_count_after_lockout_expires(self):
         mgr = self._make_manager()
         for _ in range(5):
             mgr.record_failure("1.2.3.4", "alice")
@@ -145,9 +159,44 @@ class TestLockoutManager:
         with patch("app.core.lockout.time") as mock_time:
             # Jump past the 5min lockout
             mock_time.time.return_value = now + 5 * 60 + 1
-            # Next failure should reset the count
+            # Next failure should preserve the count and begin the next cooldown.
             result = mgr.record_failure("1.2.3.4", "alice")
 
-        # After reset, one failure — no lockout yet
-        is_locked, _ = result
+        is_locked, seconds = result
+        assert is_locked is True
+        assert seconds == 5 * 60
+
+    def test_failures_escalate_after_each_cooldown(self):
+        mgr = self._make_manager()
+        start = time.time()
+        with patch("app.core.lockout.time") as mock_time:
+            mock_time.time.return_value = start
+            for _ in range(5):
+                mgr.record_failure("1.2.3.4", "alice")
+
+            for failure_number in range(6, 11):
+                cooldown_started = start + (failure_number - 6) * 5 * 60 + 0.1
+                mock_time.time.return_value = cooldown_started + 1
+                locked, _ = mgr.is_locked_out("1.2.3.4", "alice")
+                assert locked is True
+
+                mock_time.time.return_value = cooldown_started + 5 * 60 + 0.1
+                result = mgr.record_failure("1.2.3.4", "alice")
+
+        is_locked, seconds = result
+        assert is_locked is True
+        assert seconds == 30 * 60
+
+    def test_failure_count_expires_after_observation_window(self):
+        mgr = self._make_manager()
+        start = time.time()
+        with patch("app.core.lockout.time") as mock_time:
+            mock_time.time.return_value = start
+            for _ in range(5):
+                mgr.record_failure("1.2.3.4", "alice")
+
+            mock_time.time.return_value = start + mgr.CLEANUP_INTERVAL + 1
+            is_locked, seconds = mgr.record_failure("1.2.3.4", "alice")
+
         assert is_locked is False
+        assert seconds == 0
