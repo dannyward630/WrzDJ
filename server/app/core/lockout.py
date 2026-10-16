@@ -67,8 +67,8 @@ class LockoutManager:
         expired_keys = []
         for key, attempt in self._attempts.items():
             # Remove if lockout expired and no recent failures
-            expired = attempt.lockout_until < now
-            old = (now - attempt.first_failure) > self.CLEANUP_INTERVAL
+            expired = attempt.lockout_until <= now
+            old = (now - attempt.first_failure) >= self.CLEANUP_INTERVAL
             if expired and old:
                 expired_keys.append(key)
 

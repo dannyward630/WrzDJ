@@ -204,3 +204,37 @@ class TestLockoutManager:
 
         assert is_locked is False
         assert seconds == 0
+
+    def test_failure_count_expires_at_observation_window_boundary(self):
+        # Regression for be7d4154: cleanup must expire state at one hour exactly.
+        mgr = self._make_manager()
+        start = time.time()
+        with patch("app.core.lockout.time") as mock_time:
+            mock_time.time.return_value = start
+            for _ in range(5):
+                mgr.record_failure("1.2.3.4", "alice")
+
+            mock_time.time.return_value = start + mgr.CLEANUP_INTERVAL
+            is_locked, seconds = mgr.record_failure("1.2.3.4", "alice")
+
+        assert is_locked is False
+        assert seconds == 0
+
+    def test_escalated_count_expires_after_observation_window(self):
+        # Regression for be7d4154: repeated cooldowns must not create indefinite lockout.
+        mgr = self._make_manager()
+        start = time.time()
+        with patch("app.core.lockout.time") as mock_time:
+            mock_time.time.return_value = start
+            for _ in range(5):
+                mgr.record_failure("1.2.3.4", "alice")
+
+            for failure_number in range(6, 11):
+                mock_time.time.return_value = start + (failure_number - 5) * 5 * 60 + 0.1
+                mgr.record_failure("1.2.3.4", "alice")
+
+            mock_time.time.return_value = start + mgr.CLEANUP_INTERVAL + 1
+            is_locked, seconds = mgr.record_failure("1.2.3.4", "alice")
+
+        assert is_locked is False
+        assert seconds == 0
