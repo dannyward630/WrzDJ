@@ -46,6 +46,8 @@ def test_malformed_stored_credentials_mark_connection_for_reauthorization(
     with pytest.raises(AppleMusicNotConnected):
         read_stored_connection(db, test_user)
 
+    assert connection.connection_state == "reauthorize"
+    db.commit()
     db.refresh(connection)
     assert connection.connection_state == "reauthorize"
 
