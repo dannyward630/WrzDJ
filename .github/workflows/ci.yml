@@ -355,5 +355,11 @@ jobs:
           cache-from: type=gha,scope=ci-proxy
           cache-to: type=gha,mode=max,scope=ci-proxy
 
+      - name: Test proxy readiness helper
+        run: timeout 120 bash scripts/test-wait-for-container-http.sh
+
+      - name: Test proxy readiness boundary
+        run: timeout 120 bash scripts/test-proxy-readiness-boundary.sh
+
       - name: Test development proxy runtime
         run: bash scripts/test-proxy-image.sh wrzdj-proxy:smoke
