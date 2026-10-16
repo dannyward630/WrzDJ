@@ -9,6 +9,7 @@ from app.models.provider_connection import UserProviderConnection
 from app.models.set import Set
 from app.models.set_pool import SetPoolSource, SetPoolTrack
 from app.services import apple_music_catalog, apple_music_tokens
+from app.services.setbuilder import export_apple_music
 from app.services.setbuilder.export_common import ExportTrack
 
 MUSIC_USER_TOKEN = "music-user-token-1234567890"
@@ -285,3 +286,148 @@ def test_preflight_returns_weak_matches_as_explicit_unresolved_tracks(
     assert response.status_code == 200
     assert response.json()["resolved_count"] == 1
     assert response.json()["unresolved"][0]["reason"] == "no_apple_music_match"
+
+
+def test_export_requires_explicit_skip_for_unresolved_tracks(
+    client, auth_headers, db, test_user, monkeypatch
+):
+    _connect_dj(db, test_user)
+    set_obj = _set_with_tracks(db, test_user)
+    monkeypatch.setattr(apple_music_tokens, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        apple_music_catalog,
+        "resolve_tracks",
+        lambda *_args: (
+            [(ExportTrack(position=0, title="Found", artist="Artist"), "matched-id")],
+            [ExportTrack(position=1, title="Missing", artist="Artist")],
+        ),
+    )
+    create_calls = []
+    monkeypatch.setattr(
+        export_apple_music,
+        "export_to_apple_music",
+        lambda *_args: create_calls.append("created"),
+    )
+
+    response = client.post(
+        f"/api/setbuilder/sets/{set_obj.id}/export/apple-music",
+        json={"skip_unresolved": False},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["unresolved"][0]["reason"] == "no_apple_music_match"
+    assert create_calls == []
+
+
+def test_uncertain_export_response_includes_recovery_id_and_never_claims_success(
+    client, auth_headers, db, test_user, monkeypatch
+):
+    _connect_dj(db, test_user)
+    set_obj = _set_with_tracks(db, test_user)
+    monkeypatch.setattr(apple_music_tokens, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        apple_music_catalog,
+        "resolve_tracks",
+        lambda *_args: ([(ExportTrack(position=0, title="Found", artist="Artist"), "id")], []),
+    )
+
+    def uncertain(*_args):
+        raise export_apple_music.AppleMusicWriteUncertain("p.created123")
+
+    monkeypatch.setattr(export_apple_music, "export_to_apple_music", uncertain)
+    response = client.post(
+        f"/api/setbuilder/sets/{set_obj.id}/export/apple-music",
+        json={},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == {
+        "code": "apple_music_write_uncertain",
+        "message": (
+            "Apple Music export could not be confirmed. Check your library before trying again."
+        ),
+        "playlist_id": "p.created123",
+    }
+
+
+def test_concurrent_export_returns_conflict_without_claiming_an_uncertain_write(
+    client, auth_headers, db, test_user, monkeypatch
+):
+    _connect_dj(db, test_user)
+    set_obj = _set_with_tracks(db, test_user)
+    monkeypatch.setattr(apple_music_tokens, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        apple_music_catalog,
+        "resolve_tracks",
+        lambda *_args: ([(ExportTrack(position=0, title="Found", artist="Artist"), "id")], []),
+    )
+
+    def in_progress(*_args):
+        raise export_apple_music.AppleMusicExportInProgress
+
+    monkeypatch.setattr(export_apple_music, "export_to_apple_music", in_progress)
+    response = client.post(
+        f"/api/setbuilder/sets/{set_obj.id}/export/apple-music",
+        json={},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "apple_music_export_in_progress"
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_status", "expected_playlist_id"),
+    [
+        ({"action": "playlist_absent"}, "ready_to_retry", None),
+        ({"action": "playlist_found", "playlist_id": "p.found123"}, "exported", "p.found123"),
+    ],
+)
+def test_recovery_requires_uncertain_claim_and_applies_explicit_user_choice(
+    client,
+    auth_headers,
+    db,
+    test_user,
+    payload,
+    expected_status,
+    expected_playlist_id,
+):
+    set_obj = _set_with_tracks(db, test_user)
+    set_obj.apple_music_export_pending = True
+    set_obj.apple_music_export_uncertain = True
+    set_obj.apple_music_export_attempt_id = "uncertain-attempt"
+    set_obj.apple_music_export_recovery_playlist_id = "p.created123"
+    db.commit()
+
+    response = client.post(
+        f"/api/setbuilder/sets/{set_obj.id}/export/apple-music/recovery",
+        json=payload,
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == expected_status
+    db.refresh(set_obj)
+    assert set_obj.apple_music_export_pending is False
+    assert set_obj.apple_music_export_uncertain is False
+    assert set_obj.apple_music_playlist_id == expected_playlist_id
+
+
+def test_recovery_does_not_clear_an_active_export_claim(client, auth_headers, db, test_user):
+    set_obj = _set_with_tracks(db, test_user)
+    set_obj.apple_music_export_pending = True
+    set_obj.apple_music_export_uncertain = False
+    set_obj.apple_music_export_attempt_id = "active-attempt"
+    db.commit()
+
+    response = client.post(
+        f"/api/setbuilder/sets/{set_obj.id}/export/apple-music/recovery",
+        json={"action": "playlist_absent"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 409
+    db.refresh(set_obj)
+    assert set_obj.apple_music_export_pending is True

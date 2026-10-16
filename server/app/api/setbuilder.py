@@ -53,6 +53,10 @@ from app.schemas.setbuilder import (
     CurveTemplateCreate,
     CurveTemplateOut,
     CurveTemplatesResponse,
+    ExportAppleMusicIn,
+    ExportAppleMusicOut,
+    ExportAppleMusicRecoveryIn,
+    ExportAppleMusicRecoveryOut,
     ExportFileIn,
     ExportPreflightIn,
     ExportPreflightOut,
@@ -121,6 +125,7 @@ from app.services.setbuilder import (
     collaboration,
     curve,
     document_snapshot,
+    export_apple_music,
     export_common,
     export_files,
     export_spotify,
@@ -1949,6 +1954,119 @@ def export_set_spotify(
         skipped=len(unresolved),
         exported_at=set_obj.exported_at,
         status=set_obj.status,
+    )
+
+
+@router.post(
+    "/sets/{set_id}/export/apple-music",
+    response_model=ExportAppleMusicOut,
+    responses={
+        400: {"description": "Apple Music account not connected, or no exportable tracks."},
+        409: {
+            **_UNRESOLVED_409_RESPONSE,
+            "description": (
+                "Unresolved tracks require confirmation, or another export is in progress."
+            ),
+        },
+        503: {"description": "Apple Music is not configured."},
+        502: {"description": "Apple Music export failed or its outcome is uncertain."},
+    },
+)
+@limiter.limit("5/minute")
+def export_set_apple_music(
+    set_id: int,
+    payload: ExportAppleMusicIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> ExportAppleMusicOut:
+    """Create and verify one ordered Apple Music library playlist."""
+    set_obj = _get_owned_or_404(db, set_id, current_user)
+    if not apple_music_tokens.is_configured():
+        raise HTTPException(status_code=503, detail="Apple Music is not configured")
+    _, tracks = export_common.collect_export_tracks(set_obj)
+    if not tracks:
+        raise HTTPException(status_code=400, detail="Set has no tracks to export")
+    try:
+        resolved, unresolved = apple_music_catalog.resolve_tracks(db, current_user, tracks)
+    except apple_music_tokens.AppleMusicNotConnected:
+        raise HTTPException(status_code=400, detail="Apple Music account not connected") from None
+    except apple_music_tokens.AppleMusicNotConfigured:
+        raise HTTPException(status_code=503, detail="Apple Music is not configured") from None
+    except apple_music_tokens.AppleMusicError:
+        raise HTTPException(status_code=502, detail="Apple Music catalog lookup failed") from None
+    if unresolved and not payload.skip_unresolved:
+        raise _unresolved_409(_unresolved_out(unresolved, "no_apple_music_match"))
+    if not resolved:
+        raise HTTPException(status_code=400, detail="No resolvable tracks to export")
+    try:
+        outcome = export_apple_music.export_to_apple_music(db, current_user, set_obj, resolved)
+    except apple_music_tokens.AppleMusicNotConnected:
+        raise HTTPException(status_code=400, detail="Apple Music account not connected") from None
+    except export_apple_music.AppleMusicExportInProgress:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "apple_music_export_in_progress",
+                "message": "An Apple Music export is already in progress for this set.",
+            },
+        ) from None
+    except export_apple_music.AppleMusicWriteUncertain as exc:
+        detail = {
+            "code": "apple_music_write_uncertain",
+            "message": (
+                "Apple Music export could not be confirmed. Check your library before trying again."
+            ),
+            "playlist_id": exc.playlist_id,
+        }
+        raise HTTPException(status_code=502, detail=detail) from None
+    except apple_music_tokens.AppleMusicUserAuthorizationError:
+        raise HTTPException(
+            status_code=400,
+            detail="Apple Music authorization was rejected. Reconnect your account.",
+        ) from None
+    except apple_music_tokens.AppleMusicError:
+        raise HTTPException(status_code=502, detail="Apple Music export failed") from None
+    return ExportAppleMusicOut(
+        playlist_id=outcome.playlist_id,
+        playlist_url=outcome.playlist_url,
+        added=outcome.added,
+        skipped=len(unresolved),
+        exported_at=set_obj.exported_at,
+        status=set_obj.status,
+    )
+
+
+@router.post(
+    "/sets/{set_id}/export/apple-music/recovery",
+    response_model=ExportAppleMusicRecoveryOut,
+)
+@limiter.limit("5/minute")
+def reconcile_apple_music_export(
+    set_id: int,
+    payload: ExportAppleMusicRecoveryIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> ExportAppleMusicRecoveryOut:
+    """Let the DJ reconcile an ambiguous export after checking their Apple library."""
+    set_obj = _get_owned_or_404(db, set_id, current_user)
+    reconciled = export_apple_music.reconcile_uncertain_export(
+        db,
+        set_obj,
+        playlist_id=payload.playlist_id if payload.action == "playlist_found" else None,
+        confirm_playlist_absent=payload.action == "playlist_absent",
+    )
+    if not reconciled:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "apple_music_recovery_unavailable",
+                "message": "This set has no export awaiting reconciliation.",
+            },
+        )
+    return ExportAppleMusicRecoveryOut(
+        status="exported" if payload.action == "playlist_found" else "ready_to_retry"
     )
 
 
