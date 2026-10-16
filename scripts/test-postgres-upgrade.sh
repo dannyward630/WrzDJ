@@ -6,8 +6,9 @@
 #   2. Legacy PostgreSQL 16 data is rejected before teardown and left untouched.
 #   3. PostgreSQL 16 can still read that volume afterwards (rollback path).
 #   4. A failed automatic upgrade puts the PostgreSQL 16 files back.
-#   5. An upgrade killed mid-way is recovered by the next run.
-#   6. The automatic upgrade the deploy scripts run preserves the whole cluster
+#   5. Directory-only contents from an interrupted upgrade are preserved.
+#   6. An upgrade killed mid-way is recovered by the next run.
+#   7. The automatic upgrade the deploy scripts run preserves the whole cluster
 #      (databases, roles, ownership), keeps the old files in a backup volume,
 #      and the API starts on the result.
 # shellcheck disable=SC2016 # snippets below are expanded inside containers
@@ -24,6 +25,8 @@ scratch=$(mktemp -d)
 project="wrzdj-pgup-$(basename "$scratch" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-')"
 legacy_volume="${project}_postgres_data"
 backup_volume="${legacy_volume}_pg16_backup"
+directory_volume="${project}_directory_recovery"
+directory_backup_volume="${directory_volume}_pg16_backup"
 probe_volume="${project}_probe"
 legacy_network="${project}-legacy"
 legacy_db="${project}-legacy-db"
@@ -52,8 +55,10 @@ cleanup() {
   compose down --volumes --remove-orphans >/dev/null 2>&1 || true
   POSTGRES_VOLUME_NAME="$probe_volume" compose down --remove-orphans >/dev/null 2>&1 || true
   docker rm --force "${legacy_volume}-pg16-upgrade-old" "${legacy_volume}-pg16-upgrade-new" >/dev/null 2>&1 || true
+  docker rm --force "${directory_volume}-pg16-upgrade-old" "${directory_volume}-pg16-upgrade-new" >/dev/null 2>&1 || true
   docker volume ls --quiet --filter "name=${legacy_volume}_interrupted_" | xargs -r docker volume rm >/dev/null 2>&1 || true
-  docker volume rm "$legacy_volume" "$backup_volume" "$probe_volume" >/dev/null 2>&1 || true
+  docker volume ls --quiet --filter "name=${directory_volume}_interrupted_" | xargs -r docker volume rm >/dev/null 2>&1 || true
+  docker volume rm "$legacy_volume" "$backup_volume" "$directory_volume" "$directory_backup_volume" "$probe_volume" >/dev/null 2>&1 || true
   docker network rm "$legacy_network" >/dev/null 2>&1 || true
   rm -rf "$scratch"
   exit "$status"
@@ -251,9 +256,33 @@ docker stop "$legacy_db" >/dev/null
 docker rm "$legacy_db" >/dev/null
 echo 'A failed upgrade restores the PostgreSQL 16 data files.'
 
-# --- 5. An upgrade killed mid-way is recovered by the next run -----------------
+# --- 5. Directory-only interrupted contents are preserved ----------------------
+# Regression for #799 (offending fde5fdf9): recovery must keep a directory even
+# when it has no files yet, because the old guard filtered directories out.
+docker volume create "$directory_volume" >/dev/null
+docker volume create "$directory_backup_volume" >/dev/null
+docker run --rm --network none --volume "$legacy_volume:/from:ro" \
+  --volume "$directory_volume:/to" --volume "$directory_backup_volume:/backup" \
+  --entrypoint sh "$legacy_image" -c 'cp -a /from/. /to/ && cp -a /from/. /backup/ &&
+    echo 16 > /to/.wrzdj-postgres-upgrade && find /to -mindepth 1 ! -name .wrzdj-postgres-upgrade -delete &&
+    mkdir -p /to/18/docker'
+POSTGRES_UPGRADE_BACKUP_DIR="$scratch/directory-backups" POSTGRES_VOLUME_NAME="$directory_volume" \
+  bash "$upgrade" "$compose_file" >"$scratch/directory-recovery.log" 2>&1 ||
+  fail "directory-only recovery failed: $(cat "$scratch/directory-recovery.log")"
+# Recovery restores the old cluster and then deliberately continues through
+# the normal upgrade path so the retry is exercised too.
+grep -q 'Recovering from an interrupted' "$scratch/directory-recovery.log" ||
+  fail 'directory-only run did not recover the interrupted state before its upgrade retry'
+directory_interrupted_volume=$(docker volume ls --quiet --filter "name=${directory_volume}_interrupted_" | head -n 1)
+[ -n "$directory_interrupted_volume" ] || fail 'directory-only recovery did not keep the interrupted volume contents'
+docker run --rm --network none --volume "$directory_interrupted_volume:/v:ro" --entrypoint sh "$legacy_image" \
+  -c '[ -d /v/18/docker ]' || fail 'directory-only interrupted contents were deleted'
+docker volume rm "$directory_interrupted_volume" "$directory_volume" "$directory_backup_volume" >/dev/null 2>&1 || true
+echo 'Directory-only interrupted contents are preserved.'
+
+# --- 6. An upgrade killed mid-way is recovered by the next run -----------------
 # Reproduce the state a kill leaves behind: old files copied to the backup
-# volume, marker written, data volume emptied, a stray new cluster started.
+# volume, marker written, data volume emptied, and a stray new cluster started.
 docker volume create "$backup_volume" >/dev/null
 docker run --rm --network none --volume "$legacy_volume:/from" --volume "$backup_volume:/to" \
   --entrypoint sh "$legacy_image" -c 'cp -a /from/. /to/ && echo 16 > /from/.wrzdj-postgres-upgrade &&
@@ -261,13 +290,13 @@ docker run --rm --network none --volume "$legacy_volume:/from" --volume "$backup
     mkdir -p /from/18/docker && echo 18 > /from/18/docker/PG_VERSION &&
     echo written-after-the-interruption > /from/18/docker/stray-data'
 
-# --- 6. The automatic upgrade preserves the whole cluster ----------------------
+# --- 7. The automatic upgrade preserves the whole cluster ----------------------
 bash "$upgrade" "$compose_file" >"$scratch/upgrade.log" 2>&1 ||
   fail "the automatic upgrade failed: $(cat "$scratch/upgrade.log")"
 grep -q 'Recovering from an interrupted' "$scratch/upgrade.log" ||
   fail 'the upgrade did not recover the interrupted state first'
-# Regression for 931affae: recovery deleted whatever it found in the volume.
-# Anything written after the interruption must be set aside, not destroyed.
+# Regression for 931affae: recovery must preserve file contents left by a new
+# cluster startup instead of deleting them.
 interrupted_volume=$(docker volume ls --quiet --filter "name=${legacy_volume}_interrupted_" | head -n 1)
 [ -n "$interrupted_volume" ] || fail 'recovery did not keep the interrupted volume contents'
 docker run --rm --network none --volume "$interrupted_volume:/v:ro" --entrypoint sh "$legacy_image" \
