@@ -29,8 +29,15 @@ export async function login(
     throw new Error(error.detail || 'Login failed');
   }
 
-  const data = await response.json();
-  return { accessToken: data.access_token, username };
+  const data: unknown = await response.json();
+  const accessToken =
+    data !== null && typeof data === 'object' && 'access_token' in data
+      ? data.access_token
+      : undefined;
+  if (typeof accessToken !== 'string' || accessToken.trim().length === 0) {
+    throw new Error('Login response did not include a valid access token');
+  }
+  return { accessToken, username };
 }
 
 /**

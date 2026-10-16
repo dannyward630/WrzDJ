@@ -52,6 +52,30 @@ describe('login', () => {
 
     await expect(login('https://api.wrzdj.com', 'admin', 'pass')).rejects.toThrow('Login failed');
   });
+
+  it.each([
+    ['empty object', {}],
+    ['null body', null],
+    ['missing token', { token_type: 'bearer' }],
+    ['non-string token', { access_token: 123 }],
+    ['empty token', { access_token: '' }],
+    ['whitespace token', { access_token: '   ' }],
+  ])('rejects malformed successful response: %s', async (_label, body) => {
+    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(body) });
+
+    await expect(login('https://api.wrzdj.com', 'admin', 'pass'))
+      .rejects.toThrow('Login response did not include a valid access token');
+  });
+
+  it('preserves a valid access token exactly', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ access_token: '  jwt-token-123  ' }),
+    });
+
+    await expect(login('https://api.wrzdj.com', 'admin', 'pass'))
+      .resolves.toEqual({ accessToken: '  jwt-token-123  ', username: 'admin' });
+  });
 });
 
 describe('verifyToken', () => {
