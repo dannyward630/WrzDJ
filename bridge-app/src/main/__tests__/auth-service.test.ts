@@ -121,6 +121,26 @@ describe('verifyToken', () => {
     expect(result).toBeNull();
   });
 
+  it('preserves a valid username exactly', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ username: '  admin  ' }),
+    });
+
+    await expect(verifyToken('https://api.wrzdj.com', 'valid-token')).resolves.toBe('  admin  ');
+  });
+
+  it('preserves a body-stream failure as an availability error with its cause', async () => {
+    // Regression for 28125d51: interrupted transport is not malformed JSON.
+    const failure = new TypeError('terminated');
+    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.reject(failure) });
+
+    await expect(verifyToken('https://api.wrzdj.com', 'valid-token')).rejects.toMatchObject({
+      message: 'Token verification unavailable',
+      cause: failure,
+    });
+  });
+
   it('returns null on forbidden token', async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 403 });
 
@@ -142,6 +162,32 @@ describe('verifyToken', () => {
     mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({}) });
     await expect(verifyToken('https://api.wrzdj.com', 'malformed'))
       .rejects.toThrow('invalid username');
+  });
+
+  it('reports unparseable verification bodies as malformed', async () => {
+    // Regression for 0eb467c7: parser errors must not become availability failures.
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.reject(new SyntaxError('Unexpected token <')),
+    });
+
+    await expect(verifyToken('https://api.wrzdj.com', 'malformed-token'))
+      .rejects.toThrow('Token verification returned an invalid username');
+  });
+
+  it.each([
+    ['null', null],
+    ['primitive', 'admin'],
+    ['array', ['admin']],
+    ['missing username', {}],
+    ['wrong username type', { username: 42 }],
+    ['blank username', { username: '   ' }],
+  ])('reports malformed verification body for %s', async (_label, body) => {
+    // Regression for 0eb467c7: malformed verification bodies must have a stable error.
+    mockFetch.mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(body) });
+
+    await expect(verifyToken('https://api.wrzdj.com', 'malformed-token'))
+      .rejects.toThrow('Token verification returned an invalid username');
   });
 });
 
