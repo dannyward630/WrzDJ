@@ -144,6 +144,17 @@ describe('verifyToken', () => {
       .rejects.toThrow('invalid username');
   });
 
+  it('reports unparseable verification bodies as malformed', async () => {
+    // Regression for 0eb467c7: parser errors must not become availability failures.
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.reject(new SyntaxError('Unexpected token <')),
+    });
+
+    await expect(verifyToken('https://api.wrzdj.com', 'malformed-token'))
+      .rejects.toThrow('Token verification returned an invalid username');
+  });
+
   it.each([
     ['null', null],
     ['primitive', 'admin'],
