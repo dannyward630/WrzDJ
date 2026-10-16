@@ -121,6 +121,26 @@ describe('verifyToken', () => {
     expect(result).toBeNull();
   });
 
+  it('preserves a valid username exactly', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ username: '  admin  ' }),
+    });
+
+    await expect(verifyToken('https://api.wrzdj.com', 'valid-token')).resolves.toBe('  admin  ');
+  });
+
+  it('preserves a body-stream failure as an availability error with its cause', async () => {
+    // Regression for 28125d51: interrupted transport is not malformed JSON.
+    const failure = new TypeError('terminated');
+    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.reject(failure) });
+
+    await expect(verifyToken('https://api.wrzdj.com', 'valid-token')).rejects.toMatchObject({
+      message: 'Token verification unavailable',
+      cause: failure,
+    });
+  });
+
   it('returns null on forbidden token', async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 403 });
 

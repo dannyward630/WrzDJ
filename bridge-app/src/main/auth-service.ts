@@ -64,7 +64,10 @@ export async function verifyToken(
     if (!response.ok) {
       throw new Error(`Token verification failed (${response.status})`);
     }
-    const data: unknown = await response.json().catch(() => null);
+    const data: unknown = await response.json().catch((error: unknown) => {
+      if (error instanceof SyntaxError) return null;
+      throw error;
+    });
     const username =
       data !== null && typeof data === 'object' && !Array.isArray(data) && 'username' in data
         ? data.username
