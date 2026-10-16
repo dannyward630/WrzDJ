@@ -54,6 +54,8 @@ def apple_get(
     except httpx.HTTPError as exc:
         raise AppleMusicError("Apple Music request failed") from exc
     if response.status_code == 401:
+        if music_user_token:
+            raise AppleMusicUserAuthorizationError
         raise AppleMusicNotConfigured
     if response.status_code == 403 and music_user_token:
         raise AppleMusicUserAuthorizationError
