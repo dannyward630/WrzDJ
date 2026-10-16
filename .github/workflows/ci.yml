@@ -150,6 +150,9 @@ jobs:
       - name: Test the npm audit gate
         run: node --test ../scripts/npm-audit-gate.test.cjs
 
+      - name: Test dependency reporting shell safety
+        run: node --test ../scripts/dependency-health.test.cjs
+
       - name: Security audit
         # Blocking: high/critical advisories fail unless .npm-audit-ignore.json
         # lists them with a justification and an unexpired date.
