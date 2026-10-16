@@ -138,7 +138,7 @@ dump_and_back_up() {
 
 # Step 3. The marker is written first and removed last.
 replace_cluster() {
-  local restored
+  local restored quoted_user
   on_volumes "echo $OLD_MAJOR > /v/$MARKER && find /v -mindepth 1 ! -name $MARKER -delete" "$VOLUME:/v"
   compose run --detach --no-deps --name "$NEW_CONTAINER" db >/dev/null
   wait_for_server "$NEW_CONTAINER" || die "PostgreSQL $NEW_MAJOR did not start on the emptied volume"
@@ -151,8 +151,12 @@ replace_cluster() {
   # The entrypoint already created this role, so drop the dump's CREATE ROLE for
   # it. Only its first occurrence in the roles section (before any \connect)
   # is removed: table data that happens to contain the same text is untouched.
-  awk -v statement="CREATE ROLE ${DB_USER};" '
-      !past && $0 == statement { past = 1; next }
+  # Accept either spelling: keyword quoting can change across PostgreSQL
+  # versions. Quoted identifiers escape double quotes by doubling them.
+  # ENVIRON preserves backslashes, unlike awk -v argument escape processing.
+  quoted_user=${DB_USER//\"/\"\"}
+  ROLE_UNQUOTED="CREATE ROLE ${DB_USER};" ROLE_QUOTED="CREATE ROLE \"${quoted_user}\";" awk '
+      !past && ($0 == ENVIRON["ROLE_UNQUOTED"] || $0 == ENVIRON["ROLE_QUOTED"]) { past = 1; next }
       /^\\connect / { past = 1 }
       { print }' "$DUMP_FILE" |
     docker exec --interactive "$NEW_CONTAINER" \
