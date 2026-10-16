@@ -856,8 +856,20 @@ describe('BuilderWorkspace', () => {
   });
 
   it('adding a vibe preset window persists via PUT', async () => {
+    let resolveInitialWindows!: (response: {
+      windows: { t0_sec: number; t1_sec: number; label: string }[];
+    }) => void;
+    mockGetVibeWindows.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveInitialWindows = resolve;
+      }),
+    );
     render(<BuilderWorkspace setId={5} />);
     await waitFor(() => expect(screen.getByTestId('slot-block-0')).toBeInTheDocument());
+    await waitFor(() => expect(mockGetVibeWindows).toHaveBeenCalledWith(5));
+    await act(async () => {
+      resolveInitialWindows({ windows: [] });
+    });
 
     fireEvent.click(screen.getByTestId('vibe-dropdown-trigger'));
     fireEvent.click(screen.getByTestId('vibe-preset-first-dance'));
@@ -866,7 +878,7 @@ describe('BuilderWorkspace', () => {
     const [, windows] = mockPutVibeWindows.mock.calls[0];
     expect(windows).toHaveLength(1);
     expect(windows[0].label).toBe('First Dance');
-    expect(screen.getByText('FIRST DANCE')).toBeInTheDocument();
+    expect(await screen.findByText('FIRST DANCE')).toBeInTheDocument();
   });
 
   it('play queues a Tidal Bridge command for the current slot', async () => {
