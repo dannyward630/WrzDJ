@@ -10157,13 +10157,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description CSV download; the header reports whether rows were omitted. */
             200: {
                 headers: {
+                    /** @description Whether additional rows were omitted after the export limit. */
+                    "X-Export-Truncated"?: "true" | "false";
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "text/csv": string;
                 };
             };
             /** @description Validation Error */
@@ -10188,13 +10190,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description CSV download; the header reports whether rows were omitted. */
             200: {
                 headers: {
+                    /** @description Whether additional rows were omitted after the export limit. */
+                    "X-Export-Truncated"?: "true" | "false";
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "text/csv": string;
                 };
             };
             /** @description Validation Error */
