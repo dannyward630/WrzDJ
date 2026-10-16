@@ -8,17 +8,20 @@ import {
   CSRF_HEADER_VALUE,
 } from '../api';
 
-// Mock fetch globally
+// Each test owns its fetch stub and restores the original during cleanup.
 const mockFetch = vi.fn();
-global.fetch = mockFetch;
 
 describe('ApiClient', () => {
   beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch);
     mockFetch.mockReset();
     api.setToken(null);
+    api.setUnauthorizedHandler(null);
   });
 
   afterEach(() => {
+    api.setUnauthorizedHandler(null);
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
