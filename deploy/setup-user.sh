@@ -149,7 +149,9 @@ case "${1:-}" in
   --nginx)
     shift
     domains=()
+    domain_values=()
     certbot_args=()
+    cert_name=""
     while [ $# -gt 0 ]; do
       if [ "$1" = "-d" ] && [ $# -gt 1 ]; then
         domain="$2"
@@ -158,6 +160,7 @@ case "${1:-}" in
           exit 1
         fi
         domains+=("-d" "$domain")
+        domain_values+=("$domain")
         shift 2
       elif [ "$1" = "--cert-name" ] && [ $# -gt 1 ]; then
         cert_name="$2"
@@ -167,6 +170,20 @@ case "${1:-}" in
         fi
         certbot_args+=("--cert-name" "$cert_name")
         shift 2
+      elif [ "$1" = "--agree-tos" ]; then
+        certbot_args+=("--agree-tos")
+        shift
+      elif [ "$1" = "--email" ] && [ $# -gt 1 ]; then
+        email="$2"
+        if [[ ! "$email" =~ ^[^[:space:]@]+@[^[:space:]@]+$ ]]; then
+          echo "ERROR: Invalid email address: $email" >&2
+          exit 1
+        fi
+        certbot_args+=("--email" "$email")
+        shift 2
+      elif [ "$1" = "--register-unsafely-without-email" ]; then
+        certbot_args+=("--register-unsafely-without-email")
+        shift
       elif [ "$1" = "--key-type" ] && [ $# -gt 1 ]; then
         key_type="$2"
         if [ "$key_type" != "ecdsa" ] && [ "$key_type" != "rsa" ]; then
@@ -183,6 +200,14 @@ case "${1:-}" in
     if [ ${#domains[@]} -eq 0 ]; then
       echo "Usage: wrzdj-certbot --nginx -d domain1 [-d domain2 ...]" >&2
       exit 1
+    fi
+    if [ -n "$cert_name" ]; then
+      for domain in "${domain_values[@]}"; do
+        if [ "$cert_name" != "$domain" ] && [ "$cert_name" != "$domain-rsa" ]; then
+          echo "ERROR: Certificate name must match its domain or domain-rsa: $cert_name" >&2
+          exit 1
+        fi
+      done
     fi
     exec /usr/bin/certbot --nginx --non-interactive "${certbot_args[@]}" "${domains[@]}"
     ;;
@@ -209,8 +234,25 @@ if [ $# -ne 1 ] || [[ ! "$domain" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]; then
   echo "Usage: wrzdj-certificates-ready domain" >&2
   exit 1
 fi
-test -s "/etc/letsencrypt/live/$domain/fullchain.pem"
-test -s "/etc/letsencrypt/live/$domain/privkey.pem"
+live_dir="/etc/letsencrypt/live/$domain"
+if [ ! -d "$live_dir" ]; then
+  exit 1
+fi
+if [ ! -r "$live_dir" ]; then
+  exit 2
+fi
+for filename in fullchain.pem privkey.pem; do
+  path="$live_dir/$filename"
+  if [ -L "$path" ] && [ ! -e "$path" ]; then
+    exit 2
+  fi
+  if [ ! -e "$path" ]; then
+    exit 1
+  fi
+  if [ ! -r "$path" ] || [ ! -s "$path" ]; then
+    exit 2
+  fi
+done
 WRAPPER
 chmod 750 /usr/local/bin/wrzdj-certificates-ready
 chown root:wrzdj /usr/local/bin/wrzdj-certificates-ready
@@ -257,7 +299,6 @@ wrzdj ALL=(root) NOPASSWD: /usr/sbin/nginx -t
 
 # nginx service management
 wrzdj ALL=(root) NOPASSWD: /usr/bin/systemctl reload nginx
-wrzdj ALL=(root) NOPASSWD: /usr/bin/systemctl is-active --quiet nginx
 wrzdj ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx
 wrzdj ALL=(root) NOPASSWD: /usr/bin/systemctl status nginx
 

@@ -21,6 +21,8 @@ NGINX_SITES_ENABLED="$NGINX_ETC_DIR/sites-enabled"
 NGINX_CONF_D="$NGINX_ETC_DIR/conf.d"
 LETSENCRYPT_DIR="${LETSENCRYPT_DIR:-/etc/letsencrypt}"
 CERTIFICATE_CHECKER="${CERTIFICATE_CHECKER:-/usr/local/bin/wrzdj-certificates-ready}"
+NGINX_INSTALLER="${NGINX_INSTALLER:-/usr/local/bin/wrzdj-nginx-install}"
+NGINX_CONFD_INSTALLER="${NGINX_CONFD_INSTALLER:-/usr/local/bin/wrzdj-nginx-confd-install}"
 
 # Use sudo only when not running as root
 SUDO=""
@@ -56,24 +58,51 @@ certificates_ready() {
     $SUDO "$CERTIFICATE_CHECKER" "$domain"
     return
   fi
-  [ -s "$LETSENCRYPT_DIR/live/$domain/fullchain.pem" ] &&
-    [ -s "$LETSENCRYPT_DIR/live/$domain/privkey.pem" ]
+  local live_root="$LETSENCRYPT_DIR/live"
+  if [ -e "$live_root" ] && [ ! -r "$live_root" ]; then return 2; fi
+  local live_dir="$LETSENCRYPT_DIR/live/$domain"
+  if [ ! -d "$live_dir" ]; then return 1; fi
+  if [ ! -r "$live_dir" ]; then return 2; fi
+  for filename in fullchain.pem privkey.pem; do
+    local path="$live_dir/$filename"
+    if [ -L "$path" ] && [ ! -e "$path" ]; then return 2; fi
+    if [ ! -e "$path" ]; then return 1; fi
+    if [ ! -r "$path" ] || [ ! -s "$path" ]; then return 2; fi
+  done
+  return 0
 }
-
-if [ -n "$SUDO" ] && [ ! -x "$CERTIFICATE_CHECKER" ] &&
-  [ -d "$LETSENCRYPT_DIR/live" ] && [ ! -r "$LETSENCRYPT_DIR/live" ]; then
-  echo "ERROR: Cannot inspect $LETSENCRYPT_DIR/live as a non-root user." >&2
-  echo "       Install deploy/setup-user.sh or run setup-nginx.sh as root." >&2
-  exit 1
-fi
 
 TLS_READY=1
 for domain in "$API_DOMAIN" "$APP_DOMAIN" "$API_DOMAIN-rsa" "$APP_DOMAIN-rsa"; do
-  if ! certificates_ready "$domain"; then
-    TLS_READY=0
-    break
-  fi
+  probe_status=0
+  certificates_ready "$domain" || probe_status=$?
+  case "$probe_status" in
+    0) ;;
+    1) TLS_READY=0; break ;;
+    *)
+      echo "ERROR: Cannot inspect TLS certificates for $domain." >&2
+      echo "       Install deploy/setup-user.sh or run setup-nginx.sh as root." >&2
+      exit 1
+      ;;
+  esac
 done
+
+has_installed_tls_config() {
+  local config
+  for config in "$NGINX_SITES_AVAILABLE/$API_DOMAIN" \
+    "$NGINX_SITES_AVAILABLE/$APP_DOMAIN" "$NGINX_SITES_AVAILABLE/default"; do
+    if [ -f "$config" ] && grep -Eq '^[[:space:]]*ssl_certificate[[:space:]]' "$config"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+if [ "$TLS_READY" -eq 0 ] && has_installed_tls_config; then
+  echo "ERROR: Existing HTTPS configuration found but its certificate lineages are unavailable." >&2
+  echo "       Refusing to replace live TLS with the HTTP bootstrap." >&2
+  exit 1
+fi
 
 # Validate port numbers
 validate_port() {
@@ -88,6 +117,13 @@ validate_port "$PORT_FRONTEND" "PORT_FRONTEND"
 
 if [[ ! "$SSE_CONN_LIMIT" =~ ^[0-9]+$ ]] || [ "$SSE_CONN_LIMIT" -lt 1 ]; then
   echo "ERROR: Invalid SSE_CONN_LIMIT: $SSE_CONN_LIMIT (must be a positive integer)" >&2
+  exit 1
+fi
+
+if [ -n "$SUDO" ] && [ -d "$NGINX_SITES_AVAILABLE" ] &&
+  { [ ! -x "$NGINX_INSTALLER" ] || [ ! -x "$NGINX_CONFD_INSTALLER" ]; }; then
+  echo "ERROR: Required nginx install wrappers are missing or not executable." >&2
+  echo "       Run deploy/setup-user.sh as root before using setup-nginx.sh." >&2
   exit 1
 fi
 
@@ -148,8 +184,8 @@ if [ -d "$NGINX_SITES_AVAILABLE" ]; then
     local dest_name="$2"
 
     # http-level configs go to conf.d (not a vhost)
-    if [ -n "$SUDO" ] && [ -x /usr/local/bin/wrzdj-nginx-confd-install ]; then
-      $SUDO /usr/local/bin/wrzdj-nginx-confd-install "$src"
+    if [ -n "$SUDO" ]; then
+      $SUDO "$NGINX_CONFD_INSTALLER" "$src"
     else
       $SUDO cp "$src" "$NGINX_CONF_D/$dest_name"
     fi
@@ -162,11 +198,11 @@ if [ -d "$NGINX_SITES_AVAILABLE" ]; then
   echo ""
   echo "==> Installing vhost configs to sites-available"
 
-  if [ -n "$SUDO" ] && [ -x /usr/local/bin/wrzdj-nginx-install ]; then
+  if [ -n "$SUDO" ]; then
     # Use wrapper script (validates names, does cp + ln together)
-    $SUDO /usr/local/bin/wrzdj-nginx-install "$TEMPLATE_DIR/$API_DOMAIN.conf"
-    $SUDO /usr/local/bin/wrzdj-nginx-install "$TEMPLATE_DIR/$APP_DOMAIN.conf"
-    $SUDO /usr/local/bin/wrzdj-nginx-install "$TEMPLATE_DIR/default.conf"
+    $SUDO "$NGINX_INSTALLER" "$TEMPLATE_DIR/$API_DOMAIN.conf"
+    $SUDO "$NGINX_INSTALLER" "$TEMPLATE_DIR/$APP_DOMAIN.conf"
+    $SUDO "$NGINX_INSTALLER" "$TEMPLATE_DIR/default.conf"
   else
     # Running as root — direct cp/ln
     $SUDO cp "$TEMPLATE_DIR/$API_DOMAIN.conf" "$NGINX_SITES_AVAILABLE/$API_DOMAIN"
@@ -184,13 +220,19 @@ if [ -d "$NGINX_SITES_AVAILABLE" ]; then
   echo ""
   echo "==> Testing nginx config"
   if $SUDO nginx -t; then
-    if $SUDO systemctl is-active --quiet nginx; then
+    if systemctl is-active --quiet nginx; then
       echo ""
       echo "==> Reloading nginx"
       $SUDO systemctl reload nginx
       echo "    Done!"
     else
-      echo "    nginx is not active; start it after reviewing the generated config."
+      systemctl_status=$?
+      if [ "$systemctl_status" -eq 3 ]; then
+        echo "    nginx is not active; start it after reviewing the generated config."
+      else
+        echo "ERROR: Cannot determine whether nginx is active (systemctl exit $systemctl_status)." >&2
+        exit 1
+      fi
     fi
   else
     echo ""

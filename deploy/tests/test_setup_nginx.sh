@@ -38,9 +38,37 @@ chmod +x "$bin_dir/nginx"
 
 cat > "$bin_dir/systemctl" <<'SH'
 #!/usr/bin/env bash
-[ "${1:-}" = "reload" ] && [ "${2:-}" = "nginx" ]
+if [ "${1:-}" = "is-active" ]; then
+  case "${SYSTEMCTL_MODE:-active}" in
+    active) exit 0 ;;
+    inactive) exit 3 ;;
+    *) exit 1 ;;
+  esac
+fi
+if [ "${1:-}" = "reload" ] && [ "${2:-}" = "nginx" ]; then
+  touch "${RELOAD_MARKER:?}"
+  exit 0
+fi
+exit 1
 SH
 chmod +x "$bin_dir/systemctl"
+
+nginx_installer="$tmp_dir/nginx-installer"
+cat > "$nginx_installer" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+name="$(basename "$1" .conf)"
+cp "$1" "$NGINX_ETC_DIR/sites-available/$name"
+ln -sfn "$NGINX_ETC_DIR/sites-available/$name" "$NGINX_ETC_DIR/sites-enabled/$name"
+SH
+chmod +x "$nginx_installer"
+confd_installer="$tmp_dir/confd-installer"
+cat > "$confd_installer" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+cp "$1" "$NGINX_ETC_DIR/conf.d/wrzdj-$(basename "$1")"
+SH
+chmod +x "$confd_installer"
 
 certificate_checker="$bin_dir/certificates-ready"
 cat > "$certificate_checker" <<'SH'
@@ -53,11 +81,14 @@ SH
 chmod +x "$certificate_checker"
 
 export SUDO_LOG="$tmp_dir/sudo.log"
+export RELOAD_MARKER="$tmp_dir/reloaded"
 run_setup() {
   PATH="$bin_dir:$PATH" \
   NGINX_ETC_DIR="$nginx_root" \
   LETSENCRYPT_DIR="$tmp_dir/letsencrypt" \
   CERTIFICATE_CHECKER="$certificate_checker" \
+  NGINX_INSTALLER="$nginx_installer" \
+  NGINX_CONFD_INSTALLER="$confd_installer" \
   APP_DOMAIN=app.example.test \
   API_DOMAIN=api.example.test \
     bash "$repo_root/deploy/setup-nginx.sh" > "$tmp_dir/setup.log" || {
@@ -103,19 +134,23 @@ test -L "$nginx_root/sites-enabled/api.example.test"
 test -L "$nginx_root/sites-enabled/app.example.test"
 test -L "$nginx_root/sites-enabled/default"
 assert_nginx_config
+test -f "$RELOAD_MARKER"
 
 if grep -Fq 'ssl_certificate' "$nginx_root/sites-available/api.example.test"; then
   echo "bootstrap unexpectedly contains TLS certificate directives" >&2
   exit 1
 fi
-grep -Fq 'cp ' "$SUDO_LOG"
-grep -Fq 'ln ' "$SUDO_LOG"
-test "$(grep -c '^cp ' "$SUDO_LOG")" -eq 5
-test "$(grep -c '^ln ' "$SUDO_LOG")" -eq 3
+grep -Fq "$confd_installer" "$SUDO_LOG"
+grep -Fq "$nginx_installer" "$SUDO_LOG"
+if grep -Eq '(^| )cp ' "$SUDO_LOG" || grep -Eq '(^| )ln ' "$SUDO_LOG"; then
+  echo "non-root setup used unprivileged copy fallback" >&2
+  exit 1
+fi
+grep -Fq 'server_tokens off;' "$nginx_root/sites-available/api.example.test"
 
-grep -Fq -- '--nginx --cert-name api.yourdomain.com --key-type ecdsa -d api.yourdomain.com' \
+grep -Fq -- '--nginx --agree-tos --email admin@yourdomain.com --cert-name api.yourdomain.com --key-type ecdsa -d api.yourdomain.com' \
   "$repo_root/deploy/DEPLOYMENT.md"
-grep -Fq -- '--nginx --cert-name api.yourdomain.com-rsa --key-type rsa -d api.yourdomain.com' \
+grep -Fq -- '--nginx --agree-tos --email admin@yourdomain.com --cert-name api.yourdomain.com-rsa --key-type rsa -d api.yourdomain.com' \
   "$repo_root/deploy/DEPLOYMENT.md"
 grep -Fq "certbot_args+=(\"--cert-name\" \"\$cert_name\")" \
   "$repo_root/deploy/setup-user.sh"
@@ -128,6 +163,13 @@ wrapper="$tmp_dir/wrzdj-certbot"
 sed -n '/^cat > \/usr\/local\/bin\/wrzdj-certbot/,/^WRAPPER$/p' \
   "$repo_root/deploy/setup-user.sh" | sed '1d;$d' > "$wrapper"
 chmod +x "$wrapper"
+fake_certbot="$tmp_dir/certbot"
+cat > "$fake_certbot" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "${CERTBOT_LOG:?}"
+SH
+chmod +x "$fake_certbot"
+sed -i "s|/usr/bin/certbot|$fake_certbot|g" "$wrapper"
 if "$wrapper" --nginx --key-type dsa -d api.example.test; then
   echo "wrapper accepted an unsupported key type" >&2
   exit 1
@@ -136,11 +178,38 @@ if "$wrapper" --nginx --cert-name '../../etc' -d api.example.test; then
   echo "wrapper accepted a path traversal certificate name" >&2
   exit 1
 fi
+if "$wrapper" --nginx --cert-name other.example.test -d api.example.test; then
+  echo "wrapper accepted a certificate name for another domain" >&2
+  exit 1
+fi
+CERTBOT_LOG="$tmp_dir/certbot.log" "$wrapper" --nginx --agree-tos --email admin@example.test \
+  --cert-name api.example.test-rsa --key-type rsa -d api.example.test
+grep -Fq -- '--nginx --non-interactive --agree-tos --email admin@example.test --cert-name api.example.test-rsa --key-type rsa -d api.example.test' \
+  "$tmp_dir/certbot.log"
 
 checker_wrapper="$tmp_dir/wrzdj-certificates-ready"
 sed -n '/^cat > \/usr\/local\/bin\/wrzdj-certificates-ready/,/^WRAPPER$/p' \
   "$repo_root/deploy/setup-user.sh" | sed '1d;$d' > "$checker_wrapper"
 chmod +x "$checker_wrapper"
+checker_root="$tmp_dir/checker-letsencrypt"
+mkdir -p "$checker_root/live/api.example.test"
+printf cert > "$checker_root/live/api.example.test/fullchain.pem"
+printf key > "$checker_root/live/api.example.test/privkey.pem"
+sed -i "s|/etc/letsencrypt|$checker_root|g" "$checker_wrapper"
+"$checker_wrapper" api.example.test
+rm "$checker_root/live/api.example.test/privkey.pem"
+if "$checker_wrapper" api.example.test; then
+  echo "certificate checker accepted an incomplete lineage" >&2
+  exit 1
+fi
+mkdir -p "$checker_root/live/api.example.test"
+ln -s "$checker_root/archive/missing.pem" "$checker_root/live/api.example.test/privkey.pem"
+checker_status=0
+"$checker_wrapper" api.example.test || checker_status=$?
+if [ "$checker_status" -ne 2 ]; then
+  echo "certificate checker accepted an unreadable lineage" >&2
+  exit 1
+fi
 if "$checker_wrapper" '../../etc'; then
   echo "certificate checker accepted a path traversal domain" >&2
   exit 1
@@ -166,6 +235,19 @@ grep -Fq 'Cannot inspect' "$tmp_dir/permission.log" || {
   exit 1
 }
 
+missing_wrapper_root="$tmp_dir/missing-wrapper"
+mkdir -p "$missing_wrapper_root"/{sites-available,sites-enabled,conf.d}
+if PATH="$bin_dir:$PATH" NGINX_ETC_DIR="$missing_wrapper_root" \
+  LETSENCRYPT_DIR="$tmp_dir/letsencrypt" CERTIFICATE_CHECKER="$certificate_checker" \
+  NGINX_INSTALLER="$tmp_dir/missing-nginx-installer" \
+  NGINX_CONFD_INSTALLER="$tmp_dir/missing-confd-installer" \
+  APP_DOMAIN=app.example.test API_DOMAIN=api.example.test \
+  bash "$repo_root/deploy/setup-nginx.sh" > "$tmp_dir/missing-wrapper.log" 2>&1; then
+  echo "setup bypassed missing non-root install wrappers" >&2
+  exit 1
+fi
+grep -Fq 'Required nginx install wrappers are missing' "$tmp_dir/missing-wrapper.log"
+
 mkdir -p "$tmp_dir/letsencrypt/live"
 for domain in api.example.test app.example.test api.example.test-rsa app.example.test-rsa; do
   mkdir -p "$tmp_dir/letsencrypt/live/$domain"
@@ -190,5 +272,36 @@ grep -Fq '/etc/letsencrypt/live/app.example.test-rsa/fullchain.pem' \
   "$nginx_root/sites-available/app.example.test"
 grep -Fq 'HTTP bootstrap first' "$repo_root/deploy/nginx/api.conf.template"
 grep -Fq 'HTTP bootstrap first' "$repo_root/deploy/nginx/app.conf.template"
+
+mv "$tmp_dir/letsencrypt/live/api.example.test/fullchain.pem" \
+  "$tmp_dir/letsencrypt/live/api.example.test/fullchain.pem.saved"
+if PATH="$bin_dir:$PATH" NGINX_ETC_DIR="$nginx_root" LETSENCRYPT_DIR="$tmp_dir/letsencrypt" \
+  CERTIFICATE_CHECKER="$certificate_checker" NGINX_INSTALLER="$nginx_installer" \
+  NGINX_CONFD_INSTALLER="$confd_installer" APP_DOMAIN=app.example.test API_DOMAIN=api.example.test \
+  bash "$repo_root/deploy/setup-nginx.sh" > "$tmp_dir/downgrade.log" 2>&1; then
+  echo "setup downgraded an existing TLS vhost" >&2
+  exit 1
+fi
+grep -Fq 'Refusing to replace live TLS' "$tmp_dir/downgrade.log"
+
+mv "$tmp_dir/letsencrypt/live/api.example.test/fullchain.pem.saved" \
+  "$tmp_dir/letsencrypt/live/api.example.test/fullchain.pem"
+
+if SYSTEMCTL_MODE=error PATH="$bin_dir:$PATH" NGINX_ETC_DIR="$nginx_root" \
+  LETSENCRYPT_DIR="$tmp_dir/letsencrypt" CERTIFICATE_CHECKER="$certificate_checker" \
+  NGINX_INSTALLER="$nginx_installer" NGINX_CONFD_INSTALLER="$confd_installer" \
+  APP_DOMAIN=app.example.test API_DOMAIN=api.example.test \
+  bash "$repo_root/deploy/setup-nginx.sh" > "$tmp_dir/systemctl-error.log" 2>&1; then
+  echo "setup treated systemctl failure as inactive" >&2
+  exit 1
+fi
+grep -Fq 'Cannot determine whether nginx is active' "$tmp_dir/systemctl-error.log"
+
+SYSTEMCTL_MODE=inactive PATH="$bin_dir:$PATH" NGINX_ETC_DIR="$nginx_root" \
+  LETSENCRYPT_DIR="$tmp_dir/letsencrypt" CERTIFICATE_CHECKER="$certificate_checker" \
+  NGINX_INSTALLER="$nginx_installer" NGINX_CONFD_INSTALLER="$confd_installer" \
+  APP_DOMAIN=app.example.test API_DOMAIN=api.example.test \
+  bash "$repo_root/deploy/setup-nginx.sh" > "$tmp_dir/systemctl-inactive.log" 2>&1
+grep -Fq 'nginx is not active' "$tmp_dir/systemctl-inactive.log"
 
 printf 'setup-nginx provisioning contract passed\n'
