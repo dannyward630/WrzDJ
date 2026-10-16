@@ -53,6 +53,15 @@ describe('login', () => {
     await expect(login('https://api.wrzdj.com', 'admin', 'pass')).rejects.toThrow('Login failed');
   });
 
+  // Regression for a3e05cb3 / #820: malformed error bodies need a usable fallback.
+  it.each([null, { detail: { message: 'invalid' } }, { detail: '   ' }])(
+    'uses the login fallback for malformed error body %j', async (body) => {
+      mockFetch.mockResolvedValue({ ok: false, json: () => Promise.resolve(body) });
+
+      await expect(login('https://api.wrzdj.com', 'admin', 'pass')).rejects.toThrow('Login failed');
+    },
+  );
+
   // Regression for a3e05cb3 / #820: malformed success bodies must not become stored tokens.
   it.each([
     ['empty object', {}],
