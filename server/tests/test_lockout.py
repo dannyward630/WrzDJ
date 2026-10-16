@@ -238,3 +238,33 @@ class TestLockoutManager:
 
         assert is_locked is False
         assert seconds == 0
+
+    def test_stale_count_expires_when_cleanup_probe_precedes_cooldown(self):
+        # Regression for be7d4154: a throttled cleanup probe must not extend stale state.
+        mgr = self._make_manager()
+        start = time.time()
+        with patch("app.core.lockout.time") as mock_time:
+            mock_time.time.return_value = start
+            for _ in range(5):
+                mgr.record_failure("1.2.3.4", "alice")
+
+            for failure_number in range(6, 11):
+                mock_time.time.return_value = start + (failure_number - 5) * 5 * 60 + 0.1
+                mgr.record_failure("1.2.3.4", "alice")
+
+            first_expiry = start + 55 * 60 + 0.1
+            mock_time.time.return_value = first_expiry - 0.1
+            locked, _ = mgr.is_locked_out("1.2.3.4", "alice")
+            assert locked is True
+            mock_time.time.return_value = first_expiry
+            mgr.record_failure("1.2.3.4", "alice")
+
+            second_expiry = first_expiry + 30 * 60
+            mock_time.time.return_value = second_expiry - 0.1
+            locked, _ = mgr.is_locked_out("1.2.3.4", "alice")
+            assert locked is True
+            mock_time.time.return_value = second_expiry
+            is_locked, seconds = mgr.record_failure("1.2.3.4", "alice")
+
+        assert is_locked is False
+        assert seconds == 0

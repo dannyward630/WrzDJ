@@ -128,8 +128,21 @@ class LockoutManager:
                     )
                 else:
                     attempt = self._attempts[key]
-                    # Preserve the accumulated count across cooldowns so escalation remains
-                    # reachable. The cleanup interval bounds the observation window.
+                    # Cleanup is throttled globally, so expire stale keys here as well. An
+                    # active cooldown remains protected even when its first failure is old.
+                    if (
+                        attempt.lockout_until <= now
+                        and now - attempt.first_failure >= self.CLEANUP_INTERVAL
+                    ):
+                        self._attempts[key] = FailedAttempt(
+                            count=1,
+                            first_failure=now,
+                            lockout_until=0.0,
+                        )
+                        continue
+
+                    # Preserve the anchored observation-window count across cooldowns so
+                    # escalation remains reachable.
                     if attempt.lockout_until > 0 and attempt.lockout_until <= now:
                         attempt.lockout_until = 0.0
                     attempt.count += 1
