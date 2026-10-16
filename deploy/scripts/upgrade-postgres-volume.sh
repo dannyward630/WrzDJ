@@ -138,7 +138,7 @@ dump_and_back_up() {
 
 # Step 3. The marker is written first and removed last.
 replace_cluster() {
-  local restored role_statement
+  local restored quoted_user
   on_volumes "echo $OLD_MAJOR > /v/$MARKER && find /v -mindepth 1 ! -name $MARKER -delete" "$VOLUME:/v"
   compose run --detach --no-deps --name "$NEW_CONTAINER" db >/dev/null
   wait_for_server "$NEW_CONTAINER" || die "PostgreSQL $NEW_MAJOR did not start on the emptied volume"
@@ -151,15 +151,12 @@ replace_cluster() {
   # The entrypoint already created this role, so drop the dump's CREATE ROLE for
   # it. Only its first occurrence in the roles section (before any \connect)
   # is removed: table data that happens to contain the same text is untouched.
-  # Ask PostgreSQL to quote the identifier so this also matches roles such as
-  # "App-User". Pass it through ENVIRON: awk -v interprets backslash escapes,
-  # which would corrupt a valid role name containing a backslash.
-  role_statement=$(docker exec "$NEW_CONTAINER" psql -U "$DB_USER" -d postgres \
-    --quiet --tuples-only --no-align --set ON_ERROR_STOP=1 \
-    --command "SELECT format('CREATE ROLE %I;', current_user)")
-  ROLE_STATEMENT="$role_statement" awk '
-      BEGIN { statement = ENVIRON["ROLE_STATEMENT"] }
-      !past && $0 == statement { past = 1; next }
+  # Accept either spelling: keyword quoting can change across PostgreSQL
+  # versions. Quoted identifiers escape double quotes by doubling them.
+  # ENVIRON preserves backslashes, unlike awk -v argument escape processing.
+  quoted_user=${DB_USER//\"/\"\"}
+  ROLE_UNQUOTED="CREATE ROLE ${DB_USER};" ROLE_QUOTED="CREATE ROLE \"${quoted_user}\";" awk '
+      !past && ($0 == ENVIRON["ROLE_UNQUOTED"] || $0 == ENVIRON["ROLE_QUOTED"]) { past = 1; next }
       /^\\connect / { past = 1 }
       { print }' "$DUMP_FILE" |
     docker exec --interactive "$NEW_CONTAINER" \

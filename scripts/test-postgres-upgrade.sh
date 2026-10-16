@@ -118,7 +118,7 @@ for script in "$root/deploy/deploy.sh" "$root/deploy/deploy-ghcr.sh"; do
 done
 
 # --- helpers ------------------------------------------------------------------
-wait_ready() { # CONTAINER
+wait_ready() { # CONTAINER [USERNAME]
   local username=${2:-wrzdj}
   for ((attempt = 0; attempt < 60; attempt++)); do
     # TCP, not the socket: the entrypoint's temporary init server is socket-only.
@@ -357,43 +357,45 @@ start_legacy_db "$backup_volume"
 echo 'The automatic upgrade recovers an interrupted run, preserves the cluster and keeps a working backup.'
 
 # --- 8. Quoted application roles restore successfully -------------------------
-# Regression for #816 (offending 72b86c7c): pg_dumpall quotes an application
-# role when its name contains punctuation or uppercase letters. The restore
-# must remove that exact role statement while retaining identical table data.
-cat >"$quoted_override" <<YAML
+# Regression for #816 (72b86c7c): restore quoted application identifiers.
+# Also pin 2ad0ba13: json is unquoted by PG16 but
+# quoted by PG18, so deriving the dump spelling from the new server is wrong.
+compose stop >/dev/null
+for quoted_user in json App-User; do
+  cat >"$quoted_override" <<YAML
 services:
   db:
     environment:
-      POSTGRES_USER: App-User
+      POSTGRES_USER: '${quoted_user}'
       POSTGRES_PASSWORD: quoted-pass
       POSTGRES_DB: appdb
-networks:
-  default:
-    external: true
-    name: ${project}_default
 YAML
-docker volume create "$quoted_volume" >/dev/null
-docker run --detach --name "$quoted_legacy" --env POSTGRES_USER='App-User' \
-  --env POSTGRES_PASSWORD=quoted-pass --env POSTGRES_DB=appdb \
-  --volume "$quoted_volume:/var/lib/postgresql/data" "$legacy_image" >/dev/null
-wait_ready "$quoted_legacy" 'App-User'
-docker exec "$quoted_legacy" psql -U 'App-User' -d appdb -v ON_ERROR_STOP=1 -q -c \
-  'CREATE TABLE role_text (body text); INSERT INTO role_text VALUES ('\''CREATE ROLE "App-User";'\'')'
-docker stop "$quoted_legacy" >/dev/null
-docker rm "$quoted_legacy" >/dev/null
-env COMPOSE_PROJECT_NAME="$quoted_project" POSTGRES_USER='App-User' \
-  POSTGRES_PASSWORD=quoted-pass POSTGRES_DB=appdb POSTGRES_VOLUME_NAME="$quoted_volume" \
-  POSTGRES_UPGRADE_BACKUP_DIR="$scratch/quoted-backups" \
-  bash "$upgrade" "$compose_file" "$quoted_override" >"$scratch/quoted-upgrade.log" 2>&1 ||
-  fail "quoted application role upgrade failed: $(cat "$scratch/quoted-upgrade.log")"
-quoted_compose() {
-  env COMPOSE_PROJECT_NAME="$quoted_project" POSTGRES_USER='App-User' \
+  docker volume create "$quoted_volume" >/dev/null
+  docker run --detach --name "$quoted_legacy" --env POSTGRES_USER="$quoted_user" \
+    --env POSTGRES_PASSWORD=quoted-pass --env POSTGRES_DB=appdb \
+    --volume "$quoted_volume:/var/lib/postgresql/data" "$legacy_image" >/dev/null
+  wait_ready "$quoted_legacy" "$quoted_user"
+  docker exec "$quoted_legacy" psql -U "$quoted_user" -d appdb -v ON_ERROR_STOP=1 -q -c \
+    "CREATE TABLE role_text (body text); INSERT INTO role_text VALUES (format('CREATE ROLE %I;', current_user))"
+  expected_role_text=$(docker exec "$quoted_legacy" psql -U "$quoted_user" -d appdb -At -c 'SELECT * FROM role_text')
+  docker stop "$quoted_legacy" >/dev/null
+  docker rm "$quoted_legacy" >/dev/null
+  env COMPOSE_PROJECT_NAME="$quoted_project" POSTGRES_USER="$quoted_user" \
     POSTGRES_PASSWORD=quoted-pass POSTGRES_DB=appdb POSTGRES_VOLUME_NAME="$quoted_volume" \
-    docker compose -f "$compose_file" -f "$quoted_override" "$@"
-}
-quoted_compose up --detach --wait db >/dev/null || fail 'quoted-role PostgreSQL 18 did not start'
-[ "$(quoted_compose exec -T db psql -U 'App-User' -d appdb -At -c 'SELECT * FROM role_text')" = \
-  'CREATE ROLE "App-User";' ] || fail 'quoted-role restore altered role-like table data'
-[ "$(quoted_compose exec -T db psql -U 'App-User' -d appdb -At -c 'SHOW server_version_num' | cut -c1-2)" = 18 ] ||
-  fail 'quoted-role upgrade did not produce PostgreSQL 18 data'
-echo 'Quoted application roles restore successfully and preserve role-like table data.'
+    POSTGRES_UPGRADE_BACKUP_DIR="$scratch/quoted-backups" \
+    bash "$upgrade" "$compose_file" "$quoted_override" >"$scratch/quoted-upgrade.log" 2>&1 ||
+    fail "application role $quoted_user upgrade failed: $(cat "$scratch/quoted-upgrade.log")"
+  quoted_compose() {
+    env COMPOSE_PROJECT_NAME="$quoted_project" POSTGRES_USER="$quoted_user" \
+      POSTGRES_PASSWORD=quoted-pass POSTGRES_DB=appdb POSTGRES_VOLUME_NAME="$quoted_volume" \
+      docker compose -f "$compose_file" -f "$quoted_override" "$@"
+  }
+  quoted_compose up --detach --wait db >/dev/null || fail 'quoted-role PostgreSQL 18 did not start'
+  [ "$(quoted_compose exec -T db psql -U "$quoted_user" -d appdb -At -c 'SELECT * FROM role_text')" = \
+    "$expected_role_text" ] || fail 'quoted-role restore altered role-like table data'
+  [ "$(quoted_compose exec -T db psql -U "$quoted_user" -d appdb -At -c 'SHOW server_version_num' | cut -c1-2)" = 18 ] ||
+    fail 'quoted-role upgrade did not produce PostgreSQL 18 data'
+  quoted_compose down --volumes --remove-orphans >/dev/null
+  docker volume rm "$quoted_backup_volume" >/dev/null
+  echo "Application role $quoted_user restores successfully and preserves role-like table data."
+done
