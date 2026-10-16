@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BrowserWindow } from 'electron';
+import { EventEmitter } from 'events';
 import { IPC_CHANNELS, DEFAULT_SETTINGS } from '../../shared/types.js';
 
 const mocks = vi.hoisted(() => {
@@ -7,13 +7,27 @@ const mocks = vi.hoisted(() => {
   const store = {
     getApiUrl: vi.fn(() => 'https://api.example.test'),
     getToken: vi.fn(() => 'stored-token'),
+    setApiUrl: vi.fn(),
+    setToken: vi.fn(),
     clearToken: vi.fn(),
+    setLastEventCode: vi.fn(),
+    getLastEventCode: vi.fn(() => null),
     getSettings: vi.fn(() => DEFAULT_SETTINGS),
     updateSettings: vi.fn((settings) => ({ ...DEFAULT_SETTINGS, ...settings })),
   };
   class MockBridgeRunner {
+    private listeners = new Map<string, (...args: unknown[]) => void>();
     isRunning = false;
-    on = vi.fn();
+    on = vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+      this.listeners.set(event, listener);
+      return this;
+    });
+    off = vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+      if (this.listeners.get(event) === listener) this.listeners.delete(event);
+      return this;
+    });
+    emit = (event: string, ...args: unknown[]) => this.listeners.get(event)?.(...args);
+    start = vi.fn();
     stop = vi.fn();
     resetDecks = vi.fn();
     reconnect = vi.fn();
@@ -42,6 +56,9 @@ const mocks = vi.hoisted(() => {
     readFile: vi.fn(),
     writeFile: vi.fn(),
     verifyToken: vi.fn(),
+    login: vi.fn(),
+    fetchBridgeApiKey: vi.fn(),
+    fetchEvents: vi.fn(),
   };
 });
 
@@ -49,7 +66,11 @@ vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => '/tmp'), getVersion: vi.fn(() => 'test') },
   dialog: mocks.dialog,
   ipcMain: {
-    handle: vi.fn((channel, handler) => mocks.handlers.set(channel, handler)),
+    handle: vi.fn((channel, handler) => {
+      if (mocks.handlers.has(channel)) throw new Error(`Duplicate IPC handler: ${channel}`);
+      mocks.handlers.set(channel, handler);
+    }),
+    removeHandler: vi.fn((channel) => mocks.handlers.delete(channel)),
   },
 }));
 vi.mock('fs/promises', () => ({
@@ -61,19 +82,25 @@ vi.mock('../store.js', () => mocks.store);
 vi.mock('../auth-service.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../auth-service.js')>()),
   verifyToken: mocks.verifyToken,
+  login: mocks.login,
 }));
 vi.mock('../bridge-runner.js', () => ({ BridgeRunner: mocks.MockBridgeRunner }));
 vi.mock('../log-file-writer.js', () => ({ LogFileWriter: mocks.MockLogFileWriter }));
-vi.mock('../bridge-api-key-service.js', () => ({ fetchBridgeApiKey: vi.fn() }));
-vi.mock('../events-service.js', () => ({ fetchEvents: vi.fn() }));
+vi.mock('../bridge-api-key-service.js', () => ({ fetchBridgeApiKey: mocks.fetchBridgeApiKey }));
+vi.mock('../events-service.js', () => ({ fetchEvents: mocks.fetchEvents }));
 vi.mock('@bridge/plugin-registry.js', () => ({ listPluginMeta: vi.fn(() => []) }));
 
 const { registerIpcHandlers, getBridgeRunner, getLogFilePath } = await import('../ipc-handlers.js');
 
-const mainWindow = {
+type TestWindow = EventEmitter & {
+  isDestroyed: ReturnType<typeof vi.fn>;
+  webContents: { send: ReturnType<typeof vi.fn> };
+};
+
+const mainWindow = Object.assign(new EventEmitter(), {
   isDestroyed: vi.fn(() => false),
   webContents: { send: vi.fn() },
-} as unknown as BrowserWindow;
+}) as TestWindow;
 
 function handler(channel: string): (...args: unknown[]) => unknown {
   const registered = mocks.handlers.get(channel);
@@ -82,15 +109,21 @@ function handler(channel: string): (...args: unknown[]) => unknown {
 }
 
 beforeEach(() => {
+  mainWindow.emit('closed');
   mocks.handlers.clear();
   vi.clearAllMocks();
+  mainWindow.isDestroyed.mockReturnValue(false);
   mocks.store.getApiUrl.mockReturnValue('https://api.example.test');
   mocks.store.getToken.mockReturnValue('stored-token');
+  mocks.store.getApiUrl.mockReturnValue('https://api.example.test');
   mocks.store.getSettings.mockReturnValue(DEFAULT_SETTINGS);
+  (getBridgeRunner() as unknown as InstanceType<typeof mocks.MockBridgeRunner>).isRunning = false;
+  mocks.login.mockResolvedValue({ accessToken: 'new-token', username: 'dj' });
+  mocks.fetchBridgeApiKey.mockResolvedValue('bridge-key');
   mocks.dialog.showSaveDialog.mockResolvedValue({ filePath: '/tmp/report.txt' });
   mocks.readFile.mockResolvedValue('bridge log');
   mocks.writeFile.mockResolvedValue(undefined);
-  registerIpcHandlers(mainWindow);
+  registerIpcHandlers(mainWindow as never);
 });
 
 describe('settings:update IPC boundary', () => {
@@ -132,6 +165,20 @@ describe('auth:login IPC boundary', () => {
     await expect(handler(IPC_CHANNELS.AUTH_LOGIN)({}, 'file:///tmp/api', 'dj', 'secret'))
       .rejects.toThrow('valid HTTP or HTTPS URL');
   });
+
+  it('stores successful credentials without sending to a closed window', async () => {
+    let resolveLogin!: (result: { accessToken: string; username: string }) => void;
+    mocks.login.mockImplementationOnce(() => new Promise((resolve) => { resolveLogin = resolve; }));
+    const loginRequest = handler(IPC_CHANNELS.AUTH_LOGIN)({}, 'https://custom.example', 'dj', 'secret');
+    mainWindow.isDestroyed.mockReturnValue(true);
+    mainWindow.emit('closed');
+    resolveLogin({ accessToken: 'new-token', username: 'dj' });
+
+    await expect(loginRequest).resolves.toBeUndefined();
+    expect(mocks.store.setApiUrl).toHaveBeenCalledWith('https://custom.example');
+    expect(mocks.store.setToken).toHaveBeenCalledWith('new-token');
+    expect(mainWindow.webContents.send).not.toHaveBeenCalled();
+  });
 });
 
 describe('auth:logout IPC boundary', () => {
@@ -144,6 +191,21 @@ describe('auth:logout IPC boundary', () => {
       expect.objectContaining({ isAuthenticated: false }),
     );
   });
+
+  it('completes logout without sending after the window closes during stop', async () => {
+    const runner = getBridgeRunner() as unknown as InstanceType<typeof mocks.MockBridgeRunner>;
+    runner.isRunning = true;
+    let resolveStop!: () => void;
+    runner.stop.mockImplementationOnce(() => new Promise<void>((resolve) => { resolveStop = resolve; }));
+    const logoutRequest = handler(IPC_CHANNELS.AUTH_LOGOUT)({});
+    mainWindow.isDestroyed.mockReturnValue(true);
+    mainWindow.emit('closed');
+    resolveStop();
+
+    await expect(logoutRequest).resolves.toBeUndefined();
+    expect(mocks.store.clearToken).toHaveBeenCalledOnce();
+    expect(mainWindow.webContents.send).not.toHaveBeenCalled();
+  });
 });
 
 describe('events:fetch IPC boundary', () => {
@@ -155,6 +217,30 @@ describe('events:fetch IPC boundary', () => {
 });
 
 describe('auth:getState IPC boundary', () => {
+  it('returns the configured URL and retains a token when verification is unavailable', async () => {
+    mocks.store.getApiUrl.mockReturnValue('https://custom.example');
+    mocks.verifyToken.mockRejectedValueOnce(new Error('offline'));
+
+    await expect(handler(IPC_CHANNELS.AUTH_GET_STATE)({})).resolves.toEqual({
+      isAuthenticated: false,
+      username: null,
+      apiUrl: 'https://custom.example',
+    });
+    expect(mocks.store.clearToken).not.toHaveBeenCalled();
+  });
+
+  it('returns the configured URL without verifying when no token is stored', async () => {
+    mocks.store.getApiUrl.mockReturnValue('https://custom.example');
+    mocks.store.getToken.mockReturnValueOnce(null as unknown as string);
+
+    await expect(handler(IPC_CHANNELS.AUTH_GET_STATE)({})).resolves.toEqual({
+      isAuthenticated: false,
+      username: null,
+      apiUrl: 'https://custom.example',
+    });
+    expect(mocks.verifyToken).not.toHaveBeenCalled();
+  });
+
   it('clears an invalid stored token', async () => {
     mocks.verifyToken.mockResolvedValueOnce(null);
 
@@ -183,6 +269,31 @@ describe('auth:getState IPC boundary', () => {
 });
 
 describe('bridge control IPC boundary', () => {
+  it('starts with a valid event code and forwards credentials/settings', async () => {
+    await handler(IPC_CHANNELS.BRIDGE_START)({}, 'AB12');
+
+    const runner = getBridgeRunner() as unknown as InstanceType<typeof mocks.MockBridgeRunner>;
+    expect(mocks.store.setLastEventCode).toHaveBeenCalledWith('AB12');
+    expect(runner.start).toHaveBeenCalledWith({
+      apiUrl: 'https://api.example.test',
+      apiKey: 'bridge-key',
+      eventCode: 'AB12',
+      settings: DEFAULT_SETTINGS,
+    });
+  });
+
+  it.each(['ab12', 'ABC', 'ABCDEFGHIJK', 1234])('rejects invalid event code %p', async (eventCode) => {
+    await expect(handler(IPC_CHANNELS.BRIDGE_START)({}, eventCode)).rejects.toThrow('Invalid event code');
+    expect(mocks.fetchBridgeApiKey).not.toHaveBeenCalled();
+  });
+
+  it('rejects bridge start when no token is stored', async () => {
+    mocks.store.getToken.mockReturnValueOnce(null as unknown as string);
+
+    await expect(handler(IPC_CHANNELS.BRIDGE_START)({}, 'AB12')).rejects.toThrow('Not authenticated');
+    expect(mocks.fetchBridgeApiKey).not.toHaveBeenCalled();
+  });
+
   it('forwards stop and admin commands to the bridge runner', async () => {
     await handler(IPC_CHANNELS.BRIDGE_STOP)({});
     await handler(IPC_CHANNELS.BRIDGE_RESET_DECKS)({});
@@ -207,7 +318,7 @@ describe('bridge:exportDebugReport IPC boundary', () => {
   });
 
   it('uses the read fallback and awaits the report write', async () => {
-    mocks.readFile.mockRejectedValueOnce(new Error('missing log'));
+    mocks.readFile.mockRejectedValue(new Error('missing log'));
     let resolveWrite!: () => void;
     const writeCompleted = new Promise<void>((resolve) => {
       resolveWrite = resolve;
@@ -250,6 +361,40 @@ describe('bridge:exportDebugReport IPC boundary', () => {
     mocks.writeFile.mockRejectedValueOnce(new Error('disk full'));
 
     await expect(handler(IPC_CHANNELS.BRIDGE_EXPORT_DEBUG_REPORT)({})).rejects.toThrow('disk full');
+  });
+
+  it('reads the rotated log when the current log is absent', async () => {
+    mocks.readFile.mockImplementation(async (path: string) => {
+      if (path.endsWith('.1')) return 'rotated bridge log';
+      throw new Error('missing current log');
+    });
+
+    await handler(IPC_CHANNELS.BRIDGE_EXPORT_DEBUG_REPORT)({});
+
+    expect(mocks.writeFile).toHaveBeenCalledWith(
+      '/tmp/report.txt',
+      expect.stringContaining('rotated bridge log'),
+      'utf-8',
+    );
+  });
+});
+
+describe('IPC window lifecycle', () => {
+  it('removes handlers and listeners when a window closes before reopening', () => {
+    const firstSend = mainWindow.webContents.send;
+    mainWindow.emit('closed');
+
+    const secondWindow = Object.assign(new EventEmitter(), {
+      isDestroyed: vi.fn(() => false),
+      webContents: { send: vi.fn() },
+    }) as TestWindow;
+    registerIpcHandlers(secondWindow as never);
+    const runner = getBridgeRunner() as unknown as InstanceType<typeof mocks.MockBridgeRunner>;
+    runner.emit('statusChanged', { isRunning: false });
+
+    expect(firstSend).not.toHaveBeenCalled();
+    expect(secondWindow.webContents.send).toHaveBeenCalledOnce();
+    secondWindow.emit('closed');
   });
 });
 

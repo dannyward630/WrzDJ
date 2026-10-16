@@ -70,31 +70,35 @@ function validateSettingsUpdate(partial: unknown): Partial<BridgeSettings> {
 }
 
 export function registerIpcHandlers(mainWindow: BrowserWindow): void {
-  // Forward bridge status changes to renderer
-  bridgeRunner.on('statusChanged', (status) => {
+  const registeredChannels: string[] = [];
+  const registerHandler = (channel: string, listener: (...args: any[]) => any): void => {
+    ipcMain.handle(channel, listener);
+    registeredChannels.push(channel);
+  };
+  const sendToRenderer = (channel: string, ...args: unknown[]): void => {
     if (!mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(IPC_CHANNELS.BRIDGE_STATUS, status);
+      mainWindow.webContents.send(channel, ...args);
     }
-  });
-
-  // Forward ping events to renderer
-  bridgeRunner.on('ping', () => {
-    if (!mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(IPC_CHANNELS.BRIDGE_PING);
-    }
-  });
-
-  // Forward bridge log messages to renderer and persist to file
-  bridgeRunner.on('log', (logMessage: IpcLogMessage) => {
+  };
+  const statusChanged = (status: unknown) => sendToRenderer(IPC_CHANNELS.BRIDGE_STATUS, status);
+  const ping = () => sendToRenderer(IPC_CHANNELS.BRIDGE_PING);
+  const log = (logMessage: IpcLogMessage) => {
     logFileWriter.write(logMessage.level, logMessage.message);
-    if (!mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(IPC_CHANNELS.BRIDGE_LOG, logMessage);
-    }
-  });
-
+    sendToRenderer(IPC_CHANNELS.BRIDGE_LOG, logMessage);
+  };
+  bridgeRunner.on('statusChanged', statusChanged);
+  bridgeRunner.on('ping', ping);
+  bridgeRunner.on('log', log);
+  const cleanup = () => {
+    for (const channel of registeredChannels) ipcMain.removeHandler(channel);
+    bridgeRunner.off('statusChanged', statusChanged);
+    bridgeRunner.off('ping', ping);
+    bridgeRunner.off('log', log);
+  };
+  mainWindow.once('closed', cleanup);
   // --- Auth ---
 
-  ipcMain.handle(IPC_CHANNELS.AUTH_LOGIN, async (_event, apiUrl: string, username: string, password: string) => {
+  registerHandler(IPC_CHANNELS.AUTH_LOGIN, async (_event, apiUrl: string, username: string, password: string) => {
     if (!isValidHttpUrl(apiUrl)) {
       throw new Error('Invalid API URL: must be a valid HTTP or HTTPS URL');
     }
@@ -103,10 +107,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     store.setToken(result.accessToken);
 
     const authState = buildAuthState(apiUrl, result.username);
-    mainWindow.webContents.send(IPC_CHANNELS.AUTH_CHANGED, authState);
+    sendToRenderer(IPC_CHANNELS.AUTH_CHANGED, authState);
   });
 
-  ipcMain.handle(IPC_CHANNELS.AUTH_LOGOUT, async () => {
+  registerHandler(IPC_CHANNELS.AUTH_LOGOUT, async () => {
     if (bridgeRunner.isRunning) {
       try {
         await bridgeRunner.stop();
@@ -117,10 +121,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     store.clearToken();
 
     const authState = buildAuthState(store.getApiUrl(), null);
-    mainWindow.webContents.send(IPC_CHANNELS.AUTH_CHANGED, authState);
+    sendToRenderer(IPC_CHANNELS.AUTH_CHANGED, authState);
   });
 
-  ipcMain.handle(IPC_CHANNELS.AUTH_GET_STATE, async () => {
+  registerHandler(IPC_CHANNELS.AUTH_GET_STATE, async () => {
     const apiUrl = store.getApiUrl();
     const token = store.getToken();
 
@@ -128,23 +132,24 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       return buildAuthState(apiUrl, null);
     }
 
-    const username = await verifyToken(apiUrl, token);
-    if (!username) {
-      store.clearToken();
+    try {
+      const username = await verifyToken(apiUrl, token);
+      if (!username) store.clearToken();
+      return buildAuthState(apiUrl, username);
+    } catch {
+      return buildAuthState(apiUrl, null);
     }
-
-    return buildAuthState(apiUrl, username);
   });
 
   // --- Plugins ---
 
-  ipcMain.handle(IPC_CHANNELS.PLUGINS_LIST_META, () => {
+  registerHandler(IPC_CHANNELS.PLUGINS_LIST_META, () => {
     return listPluginMeta();
   });
 
   // --- Events ---
 
-  ipcMain.handle(IPC_CHANNELS.EVENTS_FETCH, async () => {
+  registerHandler(IPC_CHANNELS.EVENTS_FETCH, async () => {
     const apiUrl = store.getApiUrl();
     const token = store.getToken();
 
@@ -157,7 +162,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   // --- Bridge ---
 
-  ipcMain.handle(IPC_CHANNELS.BRIDGE_START, async (_event, eventCode: string) => {
+  registerHandler(IPC_CHANNELS.BRIDGE_START, async (_event, eventCode: string) => {
     if (!isValidEventCode(eventCode)) {
       throw new Error('Invalid event code: must be 4-10 alphanumeric characters');
     }
@@ -181,38 +186,38 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     });
   });
 
-  ipcMain.handle(IPC_CHANNELS.BRIDGE_STOP, async () => {
+  registerHandler(IPC_CHANNELS.BRIDGE_STOP, async () => {
     await bridgeRunner.stop();
   });
 
   // --- Bridge admin commands ---
 
-  ipcMain.handle(IPC_CHANNELS.BRIDGE_RESET_DECKS, async () => {
+  registerHandler(IPC_CHANNELS.BRIDGE_RESET_DECKS, async () => {
     await bridgeRunner.resetDecks();
   });
 
-  ipcMain.handle(IPC_CHANNELS.BRIDGE_RECONNECT, async () => {
+  registerHandler(IPC_CHANNELS.BRIDGE_RECONNECT, async () => {
     await bridgeRunner.reconnect();
   });
 
-  ipcMain.handle(IPC_CHANNELS.BRIDGE_RESTART, async () => {
+  registerHandler(IPC_CHANNELS.BRIDGE_RESTART, async () => {
     await bridgeRunner.restartBridge();
   });
 
   // --- Settings ---
 
-  ipcMain.handle(IPC_CHANNELS.SETTINGS_GET, () => {
+  registerHandler(IPC_CHANNELS.SETTINGS_GET, () => {
     return store.getSettings();
   });
 
-  ipcMain.handle(IPC_CHANNELS.SETTINGS_UPDATE, (_event, partial: Partial<BridgeSettings>) => {
+  registerHandler(IPC_CHANNELS.SETTINGS_UPDATE, (_event, partial: Partial<BridgeSettings>) => {
     const validated = validateSettingsUpdate(partial);
     return store.updateSettings(validated);
   });
 
   // --- Debug Report ---
 
-  ipcMain.handle(IPC_CHANNELS.BRIDGE_EXPORT_DEBUG_REPORT, async () => {
+  registerHandler(IPC_CHANNELS.BRIDGE_EXPORT_DEBUG_REPORT, async () => {
     const { filePath } = await dialog.showSaveDialog(mainWindow, {
       title: 'Export Debug Report',
       defaultPath: `wrzdj-debug-${new Date().toISOString().slice(0, 10)}.txt`,
@@ -225,11 +230,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     const settings = store.getSettings();
 
     const logContents = await (async () => {
-      try {
-        return await readFile(logFileWriter.getLogPath(), 'utf-8');
-      } catch {
-        return '(no log file found)';
+      const paths = [logFileWriter.getLogPath(), `${logFileWriter.getLogPath()}.1`];
+      const contents: string[] = [];
+      for (const path of paths) {
+        try {
+          contents.unshift(await readFile(path, 'utf-8'));
+        } catch {
+          // A rotated or not-yet-created file is optional.
+        }
       }
+      return contents.length > 0 ? contents.join('\n') : '(no log file found)';
     })();
 
     const lines = [

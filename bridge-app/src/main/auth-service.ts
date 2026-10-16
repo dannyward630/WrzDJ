@@ -35,7 +35,9 @@ export async function login(
 
 /**
  * Verify a stored token is still valid by calling /api/auth/me.
- * Returns the username if valid, null if expired/invalid.
+ * Returns the username if valid, null for definitive authorization failures.
+ * Transport, server, and malformed-response failures are thrown so callers
+ * can retain credentials during a transient outage.
  */
 export async function verifyToken(
   apiUrl: string,
@@ -46,14 +48,22 @@ export async function verifyToken(
       headers: { Authorization: `Bearer ${token}` },
     });
 
-    if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
       return null;
     }
-
+    if (!response.ok) {
+      throw new Error(`Token verification failed (${response.status})`);
+    }
     const data = await response.json();
-    return data.username || null;
-  } catch {
-    return null;
+    if (typeof data.username !== 'string' || data.username.length === 0) {
+      throw new Error('Token verification returned an invalid username');
+    }
+    return data.username;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Token verification')) {
+      throw error;
+    }
+    throw new Error('Token verification unavailable', { cause: error });
   }
 }
 

@@ -80,7 +80,12 @@ export class LogFileWriter {
       renameSync(this.logPath, this.backupPath);
       this.currentSize = 0;
     } catch {
-      // Rotation failure is non-fatal
+      // Rotation failure is non-fatal; re-sync size before the next write.
+      try {
+        this.currentSize = statSync(this.logPath).size;
+      } catch {
+        this.currentSize = 0;
+      }
     }
   }
 }

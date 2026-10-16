@@ -77,11 +77,27 @@ describe('verifyToken', () => {
     expect(result).toBeNull();
   });
 
-  it('returns null on network error', async () => {
+  it('returns null on forbidden token', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 403 });
+
+    await expect(verifyToken('https://api.wrzdj.com', 'forbidden-token')).resolves.toBeNull();
+  });
+
+  it('throws on network error', async () => {
     mockFetch.mockRejectedValue(new Error('network error'));
 
-    const result = await verifyToken('https://api.wrzdj.com', 'any-token');
-    expect(result).toBeNull();
+    await expect(verifyToken('https://api.wrzdj.com', 'any-token'))
+      .rejects.toThrow('Token verification unavailable');
+  });
+
+  it('throws on server and malformed responses', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+    await expect(verifyToken('https://api.wrzdj.com', 'server-error'))
+      .rejects.toThrow('Token verification failed (500)');
+
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({}) });
+    await expect(verifyToken('https://api.wrzdj.com', 'malformed'))
+      .rejects.toThrow('invalid username');
   });
 });
 
