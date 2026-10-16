@@ -244,6 +244,14 @@ sudo systemctl status certbot.timer
 sudo wrzdj-certbot renew --dry-run
 ```
 
+#### Migrating an existing Certbot installation
+
+The four commands above describe a fresh host. Before changing an existing host, inspect its
+lineages with `sudo certbot certificates` and review every SAN on any shared lineage. Keep the full
+SAN set intact while planning replacement with one lineage per WrzDJ hostname and vhost; do not
+blindly reuse or narrow a shared lineage. Complete that migration administratively, then rerun
+`setup-nginx.sh` only after all four hostname-specific lineages are available.
+
 Certificates auto-renew via systemd timer. Manual renewal if needed:
 ```bash
 sudo wrzdj-certbot renew
