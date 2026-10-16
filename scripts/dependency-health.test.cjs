@@ -45,7 +45,8 @@ else if (args[1] === 'create') fs.appendFileSync(process.env.CALLS, JSON.stringi
 else process.exit(2);
 `, { mode: 0o755 });
       const step = workflow.jobs['create-issues'].steps.find((item) => item.name === stepName);
-      const result = spawnSync('bash', ['-e', '-u', '-o', 'pipefail', '-c', expand(step.run)], {
+      assert.ok(step, `Workflow step exists: ${stepName}`);
+      const result = spawnSync('bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', expand(step.run)], {
         env: {
           ...process.env,
           ...Object.fromEntries(Object.entries(step.env || {}).map(([key, value]) => [key, expand(value)])),
@@ -57,10 +58,42 @@ else process.exit(2);
       });
       assert.equal(result.status, 0, result.stderr);
       assert.equal(fs.existsSync(marker), false, 'upstream output executed as shell code');
+      assert.ok(fs.existsSync(calls), 'report must create an issue');
       const requests = fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
       assert.equal(requests.length, 1);
       const body = requests[0][requests[0].indexOf('--body') + 1];
       assert.ok(body.includes(payload), 'issue body must preserve the literal upstream version');
+    } finally {
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const version of ['1.2.3', '1.2.3\nforged=true']) {
+  test(`Capture installed versions validates package metadata: ${JSON.stringify(version)}`, () => {
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'wrzdj-versions-'));
+    try {
+      for (const pkg of ['stagelinq', 'alphatheta-connect']) {
+        const directory = path.join(scratch, 'node_modules', pkg);
+        fs.mkdirSync(directory, { recursive: true });
+        fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ version }));
+      }
+      const output = path.join(scratch, 'outputs');
+      const step = workflow.jobs['contract-tests-latest'].steps.find((item) => item.id === 'versions');
+      assert.ok(step, 'Capture installed versions step exists');
+      const result = spawnSync('bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', step.run], {
+        cwd: scratch,
+        env: { ...process.env, GITHUB_OUTPUT: output },
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      if (version.includes('\n')) {
+        assert.notEqual(result.status, 0, 'malformed version must fail the capture step');
+        assert.equal(fs.existsSync(output), false, 'malformed version must not write output keys');
+      } else {
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(fs.readFileSync(output, 'utf8'), 'stagelinq=1.2.3\nalphatheta=1.2.3\n');
+      }
     } finally {
       fs.rmSync(scratch, { recursive: true, force: true });
     }
