@@ -304,7 +304,10 @@ def test_apple_status_codes_separate_deployment_and_user_authorization(monkeypat
 
     monkeypatch.setattr(apple_music_tokens.httpx, "Client", lambda **kw: Client(401, **kw))
     with pytest.raises(apple_music_tokens.AppleMusicNotConfigured):
-        apple_music_tokens.apple_get("/me/storefront", "bad-dev", music_user_token=VALID_TOKEN)
+        apple_music_tokens.apple_get("/me/storefront", "bad-dev")
+
+    with pytest.raises(apple_music_tokens.AppleMusicUserAuthorizationError):
+        apple_music_tokens.apple_get("/me/storefront", "dev", music_user_token=VALID_TOKEN)
 
     monkeypatch.setattr(apple_music_tokens.httpx, "Client", lambda **kw: Client(403, **kw))
     with pytest.raises(apple_music_tokens.AppleMusicUserAuthorizationError):
