@@ -27,13 +27,7 @@ if [ "$1" = compose ]; then
   command_line="$*"
   case "$command_line" in
     *'run --detach'*'--name'*)
-      if [ "$FAKE_PHASE" = dumping ]; then
-        : >"$FAKE_DOCKER_READY"
-        printf 'DUMP_STARTED\n' >>"$FAKE_DOCKER_LOG"
-        signal_upgrade
-      else
-        printf 'NEW_STARTED\n' >>"$FAKE_DOCKER_LOG"
-      fi
+      printf 'NEW_STARTED\n' >>"$FAKE_DOCKER_LOG"
       echo fake-new
       exit 0
       ;;
@@ -78,7 +72,6 @@ case "$1" in
     elif [[ "$*" == *'--detach --name'* ]]; then
       : >"$FAKE_DOCKER_READY"
       printf 'DUMP_STARTED\n' >>"$FAKE_DOCKER_LOG"
-      if [ "$FAKE_PHASE" = dumping ]; then signal_upgrade; fi
     fi
     ;;
   exec)
@@ -92,6 +85,7 @@ case "$1" in
     fi
     if [ "$2" = create ] && [[ "$3" == *_pg16_backup ]]; then
       : >"$FAKE_BACKUP_CREATED"
+      printf 'BACKUP_CREATED\n' >>"$FAKE_DOCKER_LOG"
       if [ "$FAKE_PHASE" = dumping ] && [ ! -e "$FAKE_SIGNAL_SENT" ]; then
         : >"$FAKE_SIGNAL_SENT"
         : >"$FAKE_DOCKER_READY"
@@ -158,6 +152,9 @@ DOCKER
     dumping)
       grep -q 'DUMP_STARTED' "$FAKE_DOCKER_LOG" || {
         echo "$signal/dumping did not reach backup boundary" >&2; return 1;
+      }
+      grep -q 'BACKUP_CREATED' "$FAKE_DOCKER_LOG" || {
+        echo "$signal/dumping did not create the backup before cancellation" >&2; return 1;
       }
       grep -Fq "volume rm ${COMPOSE_PROJECT_NAME}_postgres_data_pg16_backup" "$FAKE_DOCKER_LOG" || {
         echo "$signal/dumping did not remove incomplete backup" >&2; return 1;
