@@ -5,6 +5,7 @@ import re
 import time
 from urllib.parse import urlsplit
 
+import httpx
 import jwt
 
 from app.core.config import Settings, get_settings
@@ -12,11 +13,58 @@ from app.core.config import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 DEVELOPER_TOKEN_TTL_SECONDS = 15 * 60
+APPLE_MUSIC_API_BASE = "https://api.music.apple.com/v1"
+HTTP_TIMEOUT_SECONDS = 10
 _APPLE_IDENTIFIER_RE = re.compile(r"^[A-Z0-9]{10}$")
 
 
-class AppleMusicNotConfigured(Exception):
+class AppleMusicError(Exception):
+    """Apple Music configuration or API failure."""
+
+
+class AppleMusicNotConfigured(AppleMusicError):
     """Deployment credentials are incomplete or Apple's key cannot sign tokens."""
+
+
+class AppleMusicUserAuthorizationError(AppleMusicError):
+    """Apple rejected the DJ's Music User Token; the DJ must link again."""
+
+
+class AppleMusicNotConnected(AppleMusicError):
+    """The DJ has no usable connected Apple Music account."""
+
+
+class AppleMusicLinkSuperseded(AppleMusicError):
+    """A newer connect or disconnect operation invalidated this link attempt."""
+
+
+def apple_get(
+    path: str,
+    developer_token: str,
+    *,
+    music_user_token: str | None = None,
+    params: dict[str, str] | None = None,
+) -> dict:
+    """Issue an Apple Music API request with deployment and optional user credentials."""
+    headers = {"Authorization": f"Bearer {developer_token}"}
+    if music_user_token:
+        headers["Music-User-Token"] = music_user_token
+    try:
+        with httpx.Client(timeout=HTTP_TIMEOUT_SECONDS) as client:
+            response = client.get(f"{APPLE_MUSIC_API_BASE}{path}", headers=headers, params=params)
+    except httpx.HTTPError as exc:
+        raise AppleMusicError("Apple Music request failed") from exc
+    if response.status_code == 401:
+        if music_user_token:
+            raise AppleMusicUserAuthorizationError
+        raise AppleMusicNotConfigured
+    if response.status_code == 403 and music_user_token:
+        raise AppleMusicUserAuthorizationError
+    try:
+        response.raise_for_status()
+        return response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise AppleMusicError("Apple Music request failed") from exc
 
 
 def is_configured(settings: Settings | None = None) -> bool:

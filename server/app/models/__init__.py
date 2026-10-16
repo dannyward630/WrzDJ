@@ -12,6 +12,7 @@ from app.models.mb_artist_cache import MbArtistCache
 from app.models.now_playing import NowPlaying
 from app.models.pending_email_change import PendingEmailChange
 from app.models.play_history import PlayHistory
+from app.models.provider_connection import UserProviderConnection
 from app.models.request import Request
 from app.models.request_vote import RequestVote
 from app.models.search_cache import SearchCache
@@ -43,6 +44,7 @@ __all__ = [
     "NowPlaying",
     "PendingEmailChange",
     "PlayHistory",
+    "UserProviderConnection",
     "Request",
     "RequestVote",
     "SearchCache",

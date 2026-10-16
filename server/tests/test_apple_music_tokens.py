@@ -1,6 +1,7 @@
 """Apple Music developer-token configuration and endpoint tests."""
 
 import logging
+from unittest.mock import Mock
 
 import jwt
 import pytest
@@ -73,6 +74,27 @@ def test_developer_token_requires_apple_credentials():
             ),
             now=1_800_000_000,
         )
+
+
+@pytest.mark.parametrize(
+    ("music_user_token", "expected_error"),
+    [
+        (None, apple_music.AppleMusicNotConfigured),
+        ("dj-user-token", apple_music.AppleMusicUserAuthorizationError),
+    ],
+)
+def test_unauthorized_response_reports_the_credential_that_failed(
+    monkeypatch, music_user_token, expected_error
+):
+    response = Mock(status_code=401)
+    client = Mock()
+    client.__enter__ = Mock(return_value=client)
+    client.__exit__ = Mock(return_value=False)
+    client.get.return_value = response
+    monkeypatch.setattr(apple_music.httpx, "Client", lambda **_kwargs: client)
+
+    with pytest.raises(expected_error):
+        apple_music.apple_get("/me/library", "developer-token", music_user_token=music_user_token)
 
 
 def test_api_developer_token_reports_clear_not_configured(client, auth_headers, monkeypatch):
