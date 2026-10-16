@@ -432,9 +432,9 @@ describe('ApiClient', () => {
       expect(result.total).toBe(1);
 
       const [url] = mockFetch.mock.calls[0];
-      // Regression for the substring assertion in 43bd5021 (#800).
-      const requestUrl = new URL(url);
-      expect(requestUrl.pathname).toBe('/api/public/e/ABC123/history');
+      // Regression for 43bd5021 (#800): limit=10 also matches limit=100.
+      const requestUrl = new URL(url, 'http://test.local');
+      expect(requestUrl.pathname).toMatch(/\/api\/public\/e\/ABC123\/history$/);
       expect(requestUrl.searchParams.get('limit')).toBe('100');
       expect(requestUrl.searchParams.get('offset')).toBe('0');
     });
@@ -448,8 +448,9 @@ describe('ApiClient', () => {
       await api.getPlayHistory('ABC123', 5, 10);
 
       const [url] = mockFetch.mock.calls[0];
-      expect(url).toContain('limit=5');
-      expect(url).toContain('offset=10');
+      const requestUrl = new URL(url, 'http://test.local');
+      expect(requestUrl.searchParams.get('limit')).toBe('5');
+      expect(requestUrl.searchParams.get('offset')).toBe('10');
     });
 
     it('returns items with matched_request_id when request was fulfilled', async () => {
