@@ -1,5 +1,5 @@
 import { app, dialog, ipcMain, type BrowserWindow } from 'electron';
-import { readFileSync, writeFileSync } from 'fs';
+import { readFile, writeFile } from 'fs/promises';
 import { platform, release, arch } from 'os';
 import { login, verifyToken, buildAuthState } from './auth-service.js';
 import { fetchBridgeApiKey } from './bridge-api-key-service.js';
@@ -48,10 +48,22 @@ function validateSettingsUpdate(partial: unknown): Partial<BridgeSettings> {
     throw new Error('Invalid settings: expected an object');
   }
   const validated: Record<string, unknown> = {};
+  const nonNegativeNumberKeys = new Set([
+    'liveThresholdSeconds',
+    'pauseGraceSeconds',
+    'nowPlayingPauseSeconds',
+    'minPlaySeconds',
+  ]);
   for (const [key, value] of Object.entries(partial)) {
     const expectedType = SETTINGS_SCHEMA[key];
     if (!expectedType) continue; // skip unknown keys
     if (typeof value !== expectedType) continue; // skip wrong types
+    if (key === 'pluginConfig' && (value === null || Array.isArray(value))) continue;
+    if (expectedType === 'number') {
+      const numericValue = value as number;
+      if (!Number.isFinite(numericValue)) continue;
+      if (nonNegativeNumberKeys.has(key) && numericValue < 0) continue;
+    }
     validated[key] = value;
   }
   return validated as Partial<BridgeSettings>;
@@ -212,9 +224,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     const status = bridgeRunner.getStatus();
     const settings = store.getSettings();
 
-    const logContents = (() => {
+    const logContents = await (async () => {
       try {
-        return readFileSync(logFileWriter.getLogPath(), 'utf-8');
+        return await readFile(logFileWriter.getLogPath(), 'utf-8');
       } catch {
         return '(no log file found)';
       }
@@ -255,16 +267,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       logContents,
     ];
 
-    writeFileSync(filePath, lines.join('\n'), 'utf-8');
+    await writeFile(filePath, lines.join('\n'), 'utf-8');
     return filePath;
   });
-}
-
-/**
- * Check stored auth on startup and return initial auth state.
- */
-export async function checkStoredAuth(): Promise<void> {
-  // Will be called from main.ts after window is ready
 }
 
 /**
