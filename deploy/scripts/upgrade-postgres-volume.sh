@@ -219,7 +219,7 @@ if [ "$STATUS" -eq 4 ]; then
   compose stop db >/dev/null 2>&1 || true
   # Whatever is in the volume now may include data written after the
   # interruption (a database started by hand). Set it aside; never delete it.
-  if [ -n "$(on_volumes "find /v -mindepth 1 ! -name $MARKER ! -type d | head -n 1" "$VOLUME:/v:ro")" ]; then
+  if [ -n "$(on_volumes "find /v -mindepth 1 ! -name $MARKER | head -n 1" "$VOLUME:/v:ro")" ]; then
     INTERRUPTED_VOLUME="${VOLUME}_interrupted_$(date +%Y%m%d-%H%M%S)"
     docker volume create "$INTERRUPTED_VOLUME" >/dev/null
     # shellcheck disable=SC2016 # expanded by the container's shell
