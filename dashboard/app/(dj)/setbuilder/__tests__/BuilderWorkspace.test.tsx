@@ -322,7 +322,7 @@ describe('BuilderWorkspace', () => {
       Promise.resolve(cloneDocument(snapshot)),
     );
     mockGetCurveTemplates.mockResolvedValue(TEMPLATES);
-    mockGetVibeWindows.mockResolvedValue({ windows: [] });
+    mockGetVibeWindows.mockReset().mockResolvedValue({ windows: [] });
     mockUpdateSlotTarget.mockResolvedValue({ slot_id: 1, target_energy: 9 });
     mockPutVibeWindows.mockResolvedValue({ windows: [] });
     mockSavePairing.mockResolvedValue({ id: 44 });
@@ -878,7 +878,7 @@ describe('BuilderWorkspace', () => {
     const [, windows] = mockPutVibeWindows.mock.calls[0];
     expect(windows).toHaveLength(1);
     expect(windows[0].label).toBe('First Dance');
-    expect(await screen.findByText('FIRST DANCE')).toBeInTheDocument();
+    expect(screen.getByText('FIRST DANCE')).toBeInTheDocument();
   });
 
   it('play queues a Tidal Bridge command for the current slot', async () => {
