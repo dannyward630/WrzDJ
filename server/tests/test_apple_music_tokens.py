@@ -1,5 +1,7 @@
 """Apple Music developer-token configuration and endpoint tests."""
 
+import logging
+
 import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -24,6 +26,8 @@ def apple_settings():
         apple_music_team_id="TEAM123456",
         apple_music_key_id="KEY1234567",
         apple_music_private_key=private_key,
+        apple_music_origins="https://music.example.com",
+        cors_origins="https://unrelated.example.com",
     )
 
 
@@ -35,11 +39,24 @@ def test_developer_token_is_es256_and_short_lived(apple_settings):
     assert claims["iss"] == "TEAM123456"
     assert claims["iat"] == 1_800_000_000
     assert expires_at == claims["exp"]
+    assert claims["origin"] == ["https://music.example.com"]
     assert 0 < expires_at - claims["iat"] <= apple_music.DEVELOPER_TOKEN_TTL_SECONDS
 
 
-def test_developer_token_rejects_malformed_private_key(apple_settings):
-    apple_settings.apple_music_private_key = "not a private key"
+def test_developer_token_rejects_malformed_private_key(apple_settings, caplog):
+    secret_marker = "private-key-secret-marker"
+    apple_settings.apple_music_private_key = secret_marker
+
+    with caplog.at_level(logging.WARNING, logger=apple_music.__name__):
+        with pytest.raises(apple_music.AppleMusicNotConfigured):
+            apple_music.create_developer_token(apple_settings, now=1_800_000_000)
+
+    assert "configured private key is invalid or unsupported" in caplog.text
+    assert secret_marker not in caplog.text
+
+
+def test_developer_token_rejects_invalid_apple_origin(apple_settings):
+    apple_settings.apple_music_origins = "https://music.example.com/path"
 
     with pytest.raises(apple_music.AppleMusicNotConfigured):
         apple_music.create_developer_token(apple_settings, now=1_800_000_000)
@@ -47,11 +64,27 @@ def test_developer_token_rejects_malformed_private_key(apple_settings):
 
 def test_developer_token_requires_apple_credentials():
     with pytest.raises(apple_music.AppleMusicNotConfigured):
-        apple_music.create_developer_token(Settings(), now=1_800_000_000)
+        apple_music.create_developer_token(
+            Settings(
+                apple_music_team_id="",
+                apple_music_key_id="",
+                apple_music_private_key="",
+                apple_music_origins="",
+            ),
+            now=1_800_000_000,
+        )
 
 
 def test_api_developer_token_reports_clear_not_configured(client, auth_headers, monkeypatch):
-    monkeypatch.setattr("app.services.apple_music_tokens.get_settings", lambda: Settings())
+    monkeypatch.setattr(
+        "app.services.apple_music_tokens.get_settings",
+        lambda: Settings(
+            apple_music_team_id="",
+            apple_music_key_id="",
+            apple_music_private_key="",
+            apple_music_origins="",
+        ),
+    )
 
     response = client.get("/api/apple-music/developer-token", headers=auth_headers)
 
