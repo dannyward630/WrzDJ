@@ -59,6 +59,7 @@ class TestLockoutManager:
             assert locked is False
 
     def test_lockout_stays_active_during_final_fractional_second(self):
+        # Regression for be7d4154: positive remaining time was truncated to zero.
         mgr = self._make_manager()
         start = time.time()
         with patch("app.core.lockout.time") as mock_time:
@@ -151,6 +152,7 @@ class TestLockoutManager:
         assert lockout_seconds == 0
 
     def test_record_failure_preserves_count_after_lockout_expires(self):
+        # Regression for be7d4154: cooldown expiry reset the escalation counter.
         mgr = self._make_manager()
         for _ in range(5):
             mgr.record_failure("1.2.3.4", "alice")
@@ -167,6 +169,7 @@ class TestLockoutManager:
         assert seconds == 5 * 60
 
     def test_failures_escalate_after_each_cooldown(self):
+        # Regression for be7d4154: rejected locked attempts must still reach threshold two.
         mgr = self._make_manager()
         start = time.time()
         with patch("app.core.lockout.time") as mock_time:
@@ -188,6 +191,7 @@ class TestLockoutManager:
         assert seconds == 30 * 60
 
     def test_failure_count_expires_after_observation_window(self):
+        # Regression for be7d4154: preserved counts must remain bounded by cleanup.
         mgr = self._make_manager()
         start = time.time()
         with patch("app.core.lockout.time") as mock_time:
