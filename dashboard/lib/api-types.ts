@@ -228,6 +228,9 @@ export interface SetDetail extends SetSummary {
   key_strictness: number;
   tidal_playlist_id: string | null;
   spotify_playlist_id: string | null;
+  apple_music_playlist_id: string | null;
+  apple_music_export_uncertain: boolean;
+  apple_music_export_recovery_playlist_id: string | null;
   exported_at: string | null;
 }
 
@@ -351,3 +354,6 @@ export type UnresolvedTrack = Schemas['UnresolvedTrackOut'];
 export type ExportPreflight = Schemas['ExportPreflightOut'];
 export type ExportTidalResult = Schemas['ExportTidalOut'];
 export type ExportSpotifyResult = Schemas['ExportSpotifyOut'];
+export type ExportAppleMusicResult = Schemas['ExportAppleMusicOut'];
+export type ExportAppleMusicRecoveryRequest = Schemas['ExportAppleMusicRecoveryIn'];
+export type ExportAppleMusicRecoveryResult = Schemas['ExportAppleMusicRecoveryOut'];

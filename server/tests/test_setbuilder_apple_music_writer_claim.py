@@ -191,12 +191,13 @@ def test_uncertain_post_keeps_claim_and_retry_never_posts_again(db, test_user, m
         export_apple_music.export_to_apple_music(db, test_user, set_obj, _resolved())
     assert first.value.playlist_id is None
 
-    with pytest.raises(export_apple_music.AppleMusicExportInProgress):
+    with pytest.raises(export_apple_music.AppleMusicWriteUncertain):
         export_apple_music.export_to_apple_music(db, test_user, set_obj, _resolved())
 
     assert posts == ["POST"]
     db.refresh(set_obj)
     assert set_obj.apple_music_export_pending is True
+    assert set_obj.apple_music_export_uncertain is True
     assert set_obj.status == "draft"
 
 
@@ -341,7 +342,7 @@ def test_second_uncertain_export_preserves_confirmed_id_without_misreporting_it(
         export_apple_music.export_to_apple_music(db, test_user, set_obj, _resolved())
     db.refresh(set_obj)
     assert set_obj.apple_music_export_pending is True
-    with pytest.raises(export_apple_music.AppleMusicExportInProgress):
+    with pytest.raises(export_apple_music.AppleMusicWriteUncertain):
         export_apple_music.export_to_apple_music(db, test_user, set_obj, _resolved())
 
     assert uncertain.value.playlist_id is None
@@ -389,6 +390,51 @@ def test_release_claim_db_failure_does_not_escape_as_the_export_error(db, test_u
     )
 
     export_apple_music._release_claim(db, set_obj, "active-attempt")
+
+
+def test_explicit_absence_reconciliation_releases_only_uncertain_claim(db, test_user):
+    set_obj = _set(db, test_user)
+    set_obj.apple_music_export_pending = True
+    set_obj.apple_music_export_uncertain = True
+    set_obj.apple_music_export_attempt_id = "uncertain-attempt"
+    set_obj.apple_music_export_recovery_playlist_id = "p.recovery123"
+    db.commit()
+
+    assert export_apple_music.reconcile_uncertain_export(db, set_obj, confirm_playlist_absent=True)
+
+    db.refresh(set_obj)
+    assert set_obj.apple_music_export_pending is False
+    assert set_obj.apple_music_export_uncertain is False
+    assert set_obj.apple_music_export_attempt_id is None
+    assert set_obj.apple_music_export_recovery_playlist_id is None
+
+
+def test_explicit_found_playlist_reconciliation_records_confirmed_playlist(db, test_user):
+    set_obj = _set(db, test_user)
+    set_obj.apple_music_export_pending = True
+    set_obj.apple_music_export_uncertain = True
+    set_obj.apple_music_export_attempt_id = "uncertain-attempt"
+    db.commit()
+
+    assert export_apple_music.reconcile_uncertain_export(db, set_obj, playlist_id="p.found123")
+
+    db.refresh(set_obj)
+    assert set_obj.apple_music_playlist_id == "p.found123"
+    assert set_obj.apple_music_export_pending is False
+    assert set_obj.apple_music_export_uncertain is False
+    assert set_obj.status == "exported"
+
+
+def test_reconciliation_cannot_clear_an_active_export_claim(db, test_user):
+    set_obj = _set(db, test_user)
+    set_obj.apple_music_export_pending = True
+    set_obj.apple_music_export_uncertain = False
+    set_obj.apple_music_export_attempt_id = "active-attempt"
+    db.commit()
+
+    assert not export_apple_music.reconcile_uncertain_export(
+        db, set_obj, confirm_playlist_absent=True
+    )
 
 
 def test_stale_attempt_cannot_finalize_a_newer_claim(db, test_user, monkeypatch):

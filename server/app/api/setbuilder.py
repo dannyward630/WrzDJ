@@ -55,6 +55,8 @@ from app.schemas.setbuilder import (
     CurveTemplatesResponse,
     ExportAppleMusicIn,
     ExportAppleMusicOut,
+    ExportAppleMusicRecoveryIn,
+    ExportAppleMusicRecoveryOut,
     ExportFileIn,
     ExportPreflightIn,
     ExportPreflightOut,
@@ -1940,7 +1942,12 @@ def export_set_spotify(
     response_model=ExportAppleMusicOut,
     responses={
         400: {"description": "Apple Music account not connected, or no exportable tracks."},
-        409: _UNRESOLVED_409_RESPONSE,
+        409: {
+            **_UNRESOLVED_409_RESPONSE,
+            "description": (
+                "Unresolved tracks require confirmation, or another export is in progress."
+            ),
+        },
         503: {"description": "Apple Music is not configured."},
         502: {"description": "Apple Music export failed or its outcome is uncertain."},
     },
@@ -1988,7 +1995,7 @@ def export_set_apple_music(
         detail = {
             "code": "apple_music_write_uncertain",
             "message": (
-                "Apple Music export could not be confirmed. Do not retry; check your library."
+                "Apple Music export could not be confirmed. Check your library before trying again."
             ),
             "playlist_id": exc.playlist_id,
         }
@@ -2007,6 +2014,39 @@ def export_set_apple_music(
         skipped=len(unresolved),
         exported_at=set_obj.exported_at,
         status=set_obj.status,
+    )
+
+
+@router.post(
+    "/sets/{set_id}/export/apple-music/recovery",
+    response_model=ExportAppleMusicRecoveryOut,
+)
+@limiter.limit("5/minute")
+def reconcile_apple_music_export(
+    set_id: int,
+    payload: ExportAppleMusicRecoveryIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> ExportAppleMusicRecoveryOut:
+    """Let the DJ reconcile an ambiguous export after checking their Apple library."""
+    set_obj = _get_owned_or_404(db, set_id, current_user)
+    reconciled = export_apple_music.reconcile_uncertain_export(
+        db,
+        set_obj,
+        playlist_id=payload.playlist_id if payload.action == "playlist_found" else None,
+        confirm_playlist_absent=payload.action == "playlist_absent",
+    )
+    if not reconciled:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "apple_music_recovery_unavailable",
+                "message": "This set has no export awaiting reconciliation.",
+            },
+        )
+    return ExportAppleMusicRecoveryOut(
+        status="exported" if payload.action == "playlist_found" else "ready_to_retry"
     )
 
 
